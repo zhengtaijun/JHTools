@@ -142,7 +142,7 @@ if tool == "TRF Volume Calculator":
 else:  # tool == "Order Merge Tool"
 
     st.subheader("📋 Order Merge Tool")
-    st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/docs/instructions.md)")
+    st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/instructions.md)")
 
 
     # ---------- Upload ----------
