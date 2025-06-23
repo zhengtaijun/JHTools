@@ -123,11 +123,12 @@ if tool == "TRF Volume Calculator":
                 with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
                     result_df.to_excel(writer, index=False)
                 buffer.seek(0)
+                stamp = datetime.now().strftime("%Y%m%d%H%M%S")
                 st.success("✅ Done. Download below:")
                 st.download_button(
                     "📥 Download Excel",
                     data=buffer,
-                    file_name="TRF_Volume_Result.xlsx",
+                    file_name="TRF_Volume_Result_{stamp}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
             except Exception as e:
