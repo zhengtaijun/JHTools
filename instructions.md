@@ -5,16 +5,27 @@
 ### 🔹 Part 1: Export Files from Sale Report (RE system)
 
 1. Go to **Sale Report**.
+
 ![Sale Report](./merge%20order%20guide/1.png)
+
 2. Select a **date range**, and make sure to **check the option "Display Customer Details"**. Then click **Search** at the bottom.
+
 ![step2](./merge%20order%20guide/2.png)
+
 3. Click the export button at the bottom of the page.
+
 4. A pop-up will appear (see example below). Click **"Export as Excel"**.
+
 5. Do this for both **Order Summary** and **Order Detail** — export each one individually.
+
 ![step3](./merge%20order%20guide/3.png)
+
 6. Next, click the **Download Manager** button. It will redirect to a new page (see example).
+
 ![step4](./merge%20order%20guide/4.png)
+
 7. You’ll see the two files: one for **Order Summary**, and one for **Order Detail**. Download both files.
+
 ![step5](./merge%20order%20guide/5.png)
 
 ✅ This completes the export process from the RE system.
