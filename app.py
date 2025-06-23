@@ -128,7 +128,7 @@ if tool == "TRF Volume Calculator":
                 st.download_button(
                     "📥 Download Excel",
                     data=buffer,
-                    file_name="TRF_Volume_Result_{stamp}.xlsx",
+                    file_name=f"TRF_Volume_Result_{stamp}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
             except Exception as e:
