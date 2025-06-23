@@ -5,6 +5,16 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta, datetime
 from io import BytesIO
 import requests
+from PIL import Image
+import streamlit as st
+
+favicon = Image.open("favicon.png")
+
+st.set_page_config(
+    page_title="JHCH Tools",
+    page_icon=favicon,  # ← 设置 favicon
+    layout="centered"
+)
 
 # ────────────────────────────────────────────────────────────────
 # GLOBAL PAGE CONFIG
