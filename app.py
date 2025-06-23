@@ -16,9 +16,10 @@ st.caption("© 2025 • App author: **Andy Wang**")
 # ────────────────────────────────────────────────────────────────
 # SIDEBAR – TOOL SELECTOR
 # ────────────────────────────────────────────────────────────────
-tool = st.sidebar.selectbox(
-    "Choose a tool",
-    options=["TRF Volume Calculator", "Order Merge Tool"],
+tool = st.sidebar.radio(
+    "🧰 Select a tool:",
+    ["TRF Volume Calculator", "Order Merge Tool"],
+    index=0,
 )
 
 # =================================================================
@@ -42,6 +43,7 @@ if tool == "TRF Volume Calculator":
         response = requests.get(PRODUCT_INFO_URL)
         response.raise_for_status()
         df = pd.read_excel(BytesIO(response.content))
+        st.write("✅ Product-info file loaded. Columns found:", df.columns.tolist())
         if {"Product Name", "CBM"} - set(df.columns):
             raise ValueError("`Product Name` and `CBM` columns are required.")
         names = df["Product Name"].fillna("").astype(str)
@@ -53,6 +55,7 @@ if tool == "TRF Volume Calculator":
     # ---------- UI ----------
     warehouse_file = st.file_uploader("Upload warehouse export (Excel)", type=["xlsx"])
     col_prod = st.number_input("Column # of **Product Name**", min_value=1, value=3)
+    col_order = st.number_input("Column # of **Order Number**", min_value=1, value=7)
     col_qty = st.number_input("Column # of **Quantity**", min_value=1, value=8)
 
     # ---------- Helpers ----------
@@ -64,17 +67,24 @@ if tool == "TRF Volume Calculator":
 
     def process_volume_file(file, p_col, q_col):
         df = pd.read_excel(file)
-        names = df.iloc[:, p_col].fillna("").astype(str).tolist()
-        qtys = pd.to_numeric(df.iloc[:, q_col], errors="coerce").fillna(0)
+        st.write("📊 Warehouse file loaded. Shape:", df.shape)
 
-        vols = []
-        total = len(names)
+        product_names = df.iloc[:, p_col].fillna("").astype(str).tolist()
+        quantities = pd.to_numeric(df.iloc[:, q_col], errors="coerce").fillna(0)
 
-        def worker(start, end):
-            return [
-                match_product(names[i].strip()) if names[i].strip() else None
-                for i in range(start, end)
-            ]
+        st.write("🧾 Sample product names:", product_names[:5])
+        st.write("🔢 Sample quantities:", quantities.head().tolist())
+
+        total = len(product_names)
+        volumes: list[float | None] = []
+
+        def worker(start: int, end: int):
+            partial = []
+            for i in range(start, end):
+                name = product_names[i].strip()
+                vol = match_product(name) if name else None
+                partial.append(vol)
+            return partial
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             chunk = max(total // 4, 1)
@@ -83,14 +93,14 @@ if tool == "TRF Volume Calculator":
                 for i in range(4)
             ]
             for f in futures:
-                vols.extend(f.result())
+                volumes.extend(f.result())
 
-        df["Volume"] = pd.to_numeric(pd.Series(vols), errors="coerce").fillna(0)
-        df["Total Volume"] = df["Volume"] * qtys
-        df = pd.concat(
-            [df, pd.DataFrame({"Total Volume": [df["Total Volume"].sum()]})],
-            ignore_index=True,
-        )
+        st.write("🧮 Volume matching done. First 10:", volumes[:10])
+        df["Volume"] = pd.to_numeric(pd.Series(volumes), errors="coerce").fillna(0)
+        df["Total Volume"] = df["Volume"] * quantities
+        st.write("✅ Columns ‘Volume’ and ‘Total Volume’ added")
+
+        df = pd.concat([df, pd.DataFrame({"Total Volume": [df["Total Volume"].sum()]})], ignore_index=True)
         return df
 
     # ---------- Run ----------
@@ -107,13 +117,11 @@ if tool == "TRF Volume Calculator":
                     "📥 Download Excel",
                     data=buffer,
                     file_name="TRF_Volume_Result.xlsx",
-                    mime=(
-                        "application/vnd.openxmlformats-officedocument."
-                        "spreadsheetml.sheet"
-                    ),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
             except Exception as e:
                 st.error(f"❌ Error: {e}")
+
 
 # =================================================================
 # 2) ORDER MERGE TOOL
