@@ -30,6 +30,7 @@ tool = st.sidebar.radio(
     "🧰 Select a tool:",
     ["TRF Volume Calculator", "Order Merge Tool"],
     index=0,
+    
 )
 
 # =================================================================
@@ -141,6 +142,8 @@ if tool == "TRF Volume Calculator":
 else:  # tool == "Order Merge Tool"
 
     st.subheader("📋 Order Merge Tool")
+    st.sidebar.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/docs/instructions.md)")
+
 
     # ---------- Upload ----------
     file1 = st.file_uploader("Upload File 1", type=["xlsx"], key="merge1")
