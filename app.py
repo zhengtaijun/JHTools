@@ -43,7 +43,8 @@ if tool == "TRF Volume Calculator":
         response = requests.get(PRODUCT_INFO_URL)
         response.raise_for_status()
         df = pd.read_excel(BytesIO(response.content))
-        st.write("✅ Product-info file loaded. Columns found:", df.columns.tolist())
+        with st.expander("✅ Product-info file loaded. Click to view columns", expanded=False):
+    st.write(df.columns.tolist())
         if {"Product Name", "CBM"} - set(df.columns):
             raise ValueError("`Product Name` and `CBM` columns are required.")
         names = df["Product Name"].fillna("").astype(str)
