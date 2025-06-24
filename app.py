@@ -98,6 +98,8 @@ if tool == "TRF Volume Calculator":
             except Exception as e:
                 st.error(f"❌ Error: {e}")
 
+pass
+
 # ========== TOOL 2: Order Merge Tool ==========
 elif tool == "Order Merge Tool":
     st.subheader("📋 Order Merge Tool")
@@ -166,8 +168,10 @@ elif tool == "Order Merge Tool":
             except Exception as e:
                 st.error(f"❌ Error: {e}")
 
+pass
+
 # ========== TOOL 3: Profit Calculator ==========
-else:
+elif tool == "Profit Calculator":
     st.title("Product Profit Calculator")
     st.caption("All calculations are local · Multi-product supported · Created by Andy Wang ")
 
@@ -344,3 +348,5 @@ if st.button("Export results to Excel"):
     to_excel["Amount (NZD)"] = to_excel["Amount (NZD)"].apply(lambda x: f"{float(x):.2f}")
     to_excel.to_excel("profit_result.xlsx", index=False)
     st.success("Exported profit_result.xlsx, please check your current directory.")
+
+pass
