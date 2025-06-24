@@ -168,7 +168,6 @@ elif tool == "Order Merge Tool":
 
 # ========== TOOL 3: Profit Calculator ==========
 else:
-    st.set_page_config(page_title="Product Profit Calculator", page_icon="👑", layout="centered")
 st.title("Product Profit Calculator")
 st.caption("All calculations are local · Multi-product supported · Created by Andy Wang ")
 
