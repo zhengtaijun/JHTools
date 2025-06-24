@@ -1,53 +1,37 @@
-import pandas as pd
+# ✅ This is the updated `app.py` with 3 tools integrated
+
 import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
 from rapidfuzz import process, fuzz
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta, datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 import requests
 from PIL import Image
-import streamlit as st
 
-favicon = Image.open("favicon.png")
-
+# ========== GLOBAL CONFIG ==========
 st.set_page_config(
-    page_title="JHCH Tools",
-    page_icon=favicon,  # ← 设置 favicon
-    layout="centered"
+    page_title="JHCH Tools Suite | Andy Wang",
+    layout="centered",
+    page_icon=Image.open("favicon.png")
 )
-
-# ────────────────────────────────────────────────────────────────
-# GLOBAL PAGE CONFIG
-# ────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="JHCH Tools Suite | Andy Wang", layout="centered")
 st.title("🛠️ Jory Henley CHC – Internal Tools Suite")
 st.caption("© 2025 • App author: **Andy Wang**")
 
-# ────────────────────────────────────────────────────────────────
-# SIDEBAR – TOOL SELECTOR
-# ────────────────────────────────────────────────────────────────
+# ========== SIDEBAR NAVIGATION ==========
 tool = st.sidebar.radio(
     "🧰 Select a tool:",
-    ["TRF Volume Calculator", "Order Merge Tool"],
-    index=0,
-    
+    ["TRF Volume Calculator", "Order Merge Tool", "Profit Calculator"],
+    index=0
 )
 
-# =================================================================
-# 1) TRF VOLUME CALCULATOR
-# =================================================================
+# ========== TOOL 1: TRF Volume Calculator ==========
 if tool == "TRF Volume Calculator":
-
     st.subheader("📦 TRF Volume Calculator")
-    st.markdown(
-        "📺 **Need help?** Watch the "
-        "[instructional video here](https://youtu.be/S10a3kPEXZg)"
-    )
+    st.markdown("📺 [Instructional video](https://youtu.be/S10a3kPEXZg)")
 
-    # ---------- CONFIG ----------
-    PRODUCT_INFO_URL = (
-        "https://raw.githubusercontent.com/zhengtaijun/JHCH_TRF-Volume/main/product_info.xlsx"
-    )
+    PRODUCT_INFO_URL = "https://raw.githubusercontent.com/zhengtaijun/JHCH_TRF-Volume/main/product_info.xlsx"
 
     @st.cache_data
     def load_product_info():
@@ -55,7 +39,7 @@ if tool == "TRF Volume Calculator":
         response.raise_for_status()
         df = pd.read_excel(BytesIO(response.content))
         with st.expander("✅ Product-info file loaded. Click to view columns", expanded=False):
-            st.write(df.columns.tolist()) 
+            st.write(df.columns.tolist())
         if {"Product Name", "CBM"} - set(df.columns):
             raise ValueError("`Product Name` and `CBM` columns are required.")
         names = df["Product Name"].fillna("").astype(str)
@@ -64,13 +48,11 @@ if tool == "TRF Volume Calculator":
 
     product_dict, product_names_all = load_product_info()
 
-    # ---------- UI ----------
     warehouse_file = st.file_uploader("Upload warehouse export (Excel)", type=["xlsx"])
     col_prod = st.number_input("Column # of **Product Name**", min_value=1, value=3)
     col_order = st.number_input("Column # of **Order Number**", min_value=1, value=7)
     col_qty = st.number_input("Column # of **Quantity**", min_value=1, value=8)
 
-    # ---------- Helpers ----------
     def match_product(name: str):
         if name in product_dict:
             return product_dict[name]
@@ -79,16 +61,11 @@ if tool == "TRF Volume Calculator":
 
     def process_volume_file(file, p_col, q_col):
         df = pd.read_excel(file)
-        st.write("📊 Warehouse file loaded. Shape:", df.shape)
-
         product_names = df.iloc[:, p_col].fillna("").astype(str).tolist()
         quantities = pd.to_numeric(df.iloc[:, q_col], errors="coerce").fillna(0)
 
-        st.write("🧾 Sample product names:", product_names[:5])
-        st.write("🔢 Sample quantities:", quantities.head().tolist())
-
         total = len(product_names)
-        volumes: list[float | None] = []
+        volumes = []
 
         def worker(start: int, end: int):
             partial = []
@@ -100,22 +77,15 @@ if tool == "TRF Volume Calculator":
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             chunk = max(total // 4, 1)
-            futures = [
-                pool.submit(worker, i * chunk, (i + 1) * chunk if i < 3 else total)
-                for i in range(4)
-            ]
+            futures = [pool.submit(worker, i * chunk, (i + 1) * chunk if i < 3 else total) for i in range(4)]
             for f in futures:
                 volumes.extend(f.result())
 
-        st.write("🧮 Volume matching done. First 10:", volumes[:10])
         df["Volume"] = pd.to_numeric(pd.Series(volumes), errors="coerce").fillna(0)
         df["Total Volume"] = df["Volume"] * quantities
-        st.write("✅ Columns ‘Volume’ and ‘Total Volume’ added")
-
         df = pd.concat([df, pd.DataFrame({"Total Volume": [df["Total Volume"].sum()]})], ignore_index=True)
         return df
 
-    # ---------- Run ----------
     if warehouse_file and st.button("Calculate volume"):
         with st.spinner("Processing…"):
             try:
@@ -124,32 +94,18 @@ if tool == "TRF Volume Calculator":
                 with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
                     result_df.to_excel(writer, index=False)
                 buffer.seek(0)
-                stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-                st.success("✅ Done. Download below:")
-                st.download_button(
-                    "📥 Download Excel",
-                    data=buffer,
-                    file_name=f"TRF_Volume_Result_{stamp}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
+                st.download_button("📥 Download Excel", buffer, file_name="TRF_Volume_Result.xlsx")
             except Exception as e:
                 st.error(f"❌ Error: {e}")
 
-
-# =================================================================
-# 2) ORDER MERGE TOOL
-# =================================================================
-else:  # tool == "Order Merge Tool"
-
+# ========== TOOL 2: Order Merge Tool ==========
+elif tool == "Order Merge Tool":
     st.subheader("📋 Order Merge Tool")
-    st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/6b153d3cb80f76c8b766c3c30e6444d568c8abfc/instructions.md)")
+    st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/instructions.md)")
 
-
-    # ---------- Upload ----------
     file1 = st.file_uploader("Upload File 1", type=["xlsx"], key="merge1")
     file2 = st.file_uploader("Upload File 2", type=["xlsx"], key="merge2")
 
-    # ---------- Helper funcs ----------
     def clean_phone(num):
         if pd.notna(num):
             num = str(int(num)) if isinstance(num, float) else str(num)
@@ -187,8 +143,7 @@ else:  # tool == "Order Merge Tool"
                 1 if freight_map.get(order_no, 0) > 0 else "pickup",
                 "",
                 grp["Bill Name"].iloc[0],
-                " ".join(filter(None, [clean_phone(grp["Billing Phone"].iloc[0]),
-                                       clean_phone(grp["Billing Mobile"].iloc[0])])),
+                " ".join(filter(None, [clean_phone(grp["Billing Phone"].iloc[0]), clean_phone(grp["Billing Mobile"].iloc[0])])),
                 "", "", "", "",
                 1 if grp["Order Status"].iloc[0] == "Awaiting Payment" else "",
                 "", "",
@@ -198,7 +153,6 @@ else:  # tool == "Order Merge Tool"
 
         return pd.DataFrame(rows)
 
-    # ---------- Run ----------
     if file1 and file2 and st.button("Merge orders"):
         with st.spinner("Processing…"):
             try:
@@ -208,13 +162,72 @@ else:  # tool == "Order Merge Tool"
                     with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
                         merged.to_excel(writer, index=False, header=False)
                     out.seek(0)
-                    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-                    st.success("✅ Merge complete. Download below:")
-                    st.download_button(
-                        "📥 Download Merged Excel",
-                        data=out,
-                        file_name=f"order_merge_{stamp}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
+                    st.download_button("📥 Download Merged Excel", out, file_name="order_merge.xlsx")
             except Exception as e:
                 st.error(f"❌ Error: {e}")
+
+# ========== TOOL 3: Profit Calculator ==========
+else:
+    st.subheader("💰 Profit Calculator")
+    cost_mode = st.radio("1. Product Cost Input Mode:", ["Total", "Individual"], horizontal=True)
+    costs = []
+    if cost_mode == "Total":
+        total_cost = st.number_input("Total order cost (NZD)", min_value=0.0, step=0.01, value=None)
+    else:
+        num = st.number_input("Number of products", min_value=1, max_value=20, value=2)
+        cols = st.columns(int(num))
+        for i in range(int(num)):
+            c = cols[i].number_input(f"Product {i+1} cost", min_value=0.0, step=0.01, value=None, key=f"c{i}")
+            costs.append(c or 0)
+        total_cost = sum(costs)
+
+    vol_mode = st.radio("2. Volume Input Mode:", ["Total", "Individual"], horizontal=True)
+    vols = []
+    if vol_mode == "Total":
+        total_volume = st.number_input("Total volume (m³)", min_value=0.0, step=0.001, value=None)
+    else:
+        count = int(num) if cost_mode == "Individual" else st.number_input("Number of volume products", 1, 20, 2)
+        vcols = st.columns(count)
+        for i in range(count):
+            v = vcols[i].number_input(f"Product {i+1} volume", min_value=0.0, step=0.001, value=None, key=f"v{i}")
+            vols.append(v or 0)
+        total_volume = sum(vols)
+
+    ship_unit = st.number_input("3. Shipping Price per m³ (excl. GST)", min_value=0.0, step=0.01, value=150.0)
+    sale_price = st.number_input("4. Sale Price (incl. GST)", min_value=0.0, step=0.01, value=None)
+
+    gst_cost = (total_cost or 0) * 1.15
+    shipping_cost = (total_volume or 0) * (ship_unit or 0) * 1.15
+    rent = (sale_price or 0) * 0.10
+    jcd = (sale_price or 0) * 0.09
+    total_expense = gst_cost + shipping_cost + rent + jcd
+    profit = (sale_price or 0) - total_expense
+    profit_ex_gst = profit / 1.15 if profit else 0
+
+    def pct(n): return f"{(n/(sale_price or 1)*100):.1f}%" if sale_price else "-"
+
+    df = pd.DataFrame([
+        ["COGS", gst_cost, pct(gst_cost)],
+        ["Shipping", shipping_cost, pct(shipping_cost)],
+        ["Rent", rent, pct(rent)],
+        ["JCD Cost", jcd, pct(jcd)],
+        ["Total Cost", total_expense, pct(total_expense)],
+        ["Profit (incl. GST)", profit, pct(profit)],
+        ["Profit (excl. GST)", profit_ex_gst, ""]
+    ], columns=["Item", "Amount (NZD)", "Ratio to Sale"])
+    df["Amount (NZD)"] = df["Amount (NZD)"].map(lambda x: f"{x:.2f}")
+    st.table(df)
+
+    if sale_price:
+        fig, ax = plt.subplots()
+        ax.pie([gst_cost, shipping_cost, rent, jcd, max(profit, 0)],
+               labels=["COGS", "Shipping", "Rent", "JCD", "Profit"],
+               autopct="%1.1f%%", startangle=90)
+        ax.axis("equal")
+        st.pyplot(fig)
+
+    if st.button("Export to Excel"):
+        out = BytesIO()
+        df.to_excel(out, index=False)
+        out.seek(0)
+        st.download_button("📥 Download Excel", out, file_name="profit_result.xlsx")
