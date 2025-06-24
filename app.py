@@ -168,8 +168,8 @@ elif tool == "Order Merge Tool":
 
 # ========== TOOL 3: Profit Calculator ==========
 else:
-st.title("Product Profit Calculator")
-st.caption("All calculations are local · Multi-product supported · Created by Andy Wang ")
+    st.title("Product Profit Calculator")
+    st.caption("All calculations are local · Multi-product supported · Created by Andy Wang ")
 
 # =============== 产品订货成本 ===============
 st.header("1. Product Cost")
