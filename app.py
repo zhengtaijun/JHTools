@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -58,9 +57,7 @@ if tool == "TRF Volume Calculator":
     def match_product(name: str):
         if name in product_dict:
             return product_dict[name]
-        match, score, _ = process.extractOne(
-            name, product_names_all, scorer=fuzz.partial_ratio
-        )
+        match, score, _ = process.extractOne(name, product_names_all, scorer=fuzz.partial_ratio)
         return product_dict[match] if score >= 80 else None
 
     def process_volume_file(file, p_col, q_col):
@@ -178,13 +175,12 @@ elif tool == "Profit Calculator":
     st.subheader("💰 Profit Calculator")
     st.caption("All data is calculated locally · Multi-product supported · Created by Andy Wang")
 
-    # =============== 1. Product Cost ===============
+    # 1. Product Cost
     cost_mode = st.radio(
         "Input mode:",
         ["Total order cost", "Individual product cost"],
         horizontal=True
     )
-
     costs = []
     if cost_mode == "Total order cost":
         total_cost = st.number_input(
@@ -192,6 +188,7 @@ elif tool == "Profit Calculator":
             min_value=0.0,
             step=0.01,
             format="%.2f",
+            value=None,
             placeholder="E.g. 350.00"
         ) or 0.0
     else:
@@ -208,13 +205,14 @@ elif tool == "Profit Calculator":
                 min_value=0.0,
                 step=0.01,
                 format="%.2f",
+                value=None,
                 placeholder="E.g. 289.75",
                 key=f"cost_{i}"
             ) or 0.0
             costs.append(c)
         total_cost = sum(costs)
 
-    # =============== 2. Product Volume (m³) ===============
+    # 2. Product Volume (m³)
     vol_mode = st.radio(
         "Input mode:",
         ["Total volume", "Individual product volume"],
@@ -227,7 +225,109 @@ elif tool == "Profit Calculator":
             min_value=0.0,
             step=0.0001,
             format="%.3f",
+            value=None,
             placeholder="E.g. 0.75"
         ) or 0.0
     else:
-        count = st.number_input(
+        num_vols = num_products if cost_mode == "Individual product cost" else st.number_input(
+            "Number of volume products",
+            min_value=1,
+            max_value=20,
+            value=2
+        )
+        cols_v = st.columns(num_vols)
+        for i in range(num_vols):
+            v = cols_v[i].number_input(
+                f"Product {i+1} volume",
+                min_value=0.0,
+                step=0.0001,
+                format="%.3f",
+                value=None,
+                placeholder="E.g. 0.15",
+                key=f"volume_{i}"
+            ) or 0.0
+            volumes.append(v)
+        total_volume = sum(volumes)
+
+    # 3. Shipping Unit Price
+    shipping_unit_price = st.number_input(
+        "Shipping unit price (NZD/m³, GST not included, default 150)",
+        min_value=0.0,
+        step=0.01,
+        format="%.2f",
+        value=150.0
+    )
+
+    # 4. Sale Price
+    sale_price = st.number_input(
+        "Input sale price (GST included, NZD)",
+        min_value=0.0,
+        step=0.01,
+        format="%.2f",
+        value=None,
+        placeholder="E.g. 1200"
+    ) or 0.0
+
+    # Calculations
+    gst_cost = total_cost * 1.15
+    shipping_cost = total_volume * shipping_unit_price
+    shipping_gst = shipping_cost * 1.15
+    rent = sale_price * 0.10
+    jcd = sale_price * 0.09
+    total_expense = gst_cost + shipping_gst + rent + jcd
+    profit_with_gst = sale_price - total_expense
+    profit_no_gst = profit_with_gst / 1.15 if profit_with_gst else 0.0
+
+    def pct(n):
+        return f"{(n/(sale_price or 1)*100):.2f}" + "%" if sale_price else "-"
+
+    result_rows = [
+        ["COGS", gst_cost, pct(gst_cost)],
+        ["Shipping", shipping_gst, pct(shipping_gst)],
+        ["Rent (10%)", rent, pct(rent)],
+        ["JCD Cost (9%)", jcd, pct(jcd)],
+        ["Total Cost", total_expense, pct(total_expense)],
+        ["Profit (incl. GST)", profit_with_gst, pct(profit_with_gst)],
+        ["Profit (excl. GST)", profit_no_gst, ""]
+    ]
+    df_res = pd.DataFrame(result_rows, columns=["Item", "Amount (NZD)", "Ratio to Sale Price"])
+    df_res["Amount (NZD)"] = df_res["Amount (NZD)"].map(lambda x: f"{x:.2f}")
+    st.table(df_res)
+
+    with st.expander("Calculation details"):
+        st.markdown(f"""
+- **Total order cost** = {total_cost:.2f} NZD
+- **COGS** = Total order cost × 1.15 = {gst_cost:.2f} NZD
+- **Total volume** = {total_volume:.3f} m³
+- **Shipping (no GST)** = Total volume × Shipping unit price = {shipping_cost:.2f} NZD
+- **Shipping (GST included)** = Shipping × 1.15 = {shipping_gst:.2f} NZD
+- **COGS & Shipping** = COGS + Shipping = {gst_cost+shipping_gst:.2f} NZD
+- **Rent** = Sale price × 10% = {rent:.2f} NZD
+- **JCD Cost** = Sale price × 9% = {jcd:.2f} NZD
+- **Total cost** = COGS & Shipping + Rent + JCD Cost = {total_expense:.2f} NZD
+- **Profit (incl. GST)** = Sale price - Total cost = {profit_with_gst:.2f} NZD
+- **Profit (excl. GST)** = Profit (incl. GST) / 1.15 = {profit_no_gst:.2f} NZD
+        """
+    )
+
+    if sale_price > 0:
+        fig, ax = plt.subplots()
+        ax.pie(
+            [gst_cost, shipping_gst, rent, jcd, max(profit_with_gst, 0)],
+            labels=["COGS", "Shipping", "Rent", "JCD", "Profit"],
+            autopct="%1.1f%%",
+            startangle=90
+        )
+        ax.axis("equal")
+        st.pyplot(fig)
+
+    if st.button("Export results to Excel"):
+        out = BytesIO()
+        df_res.to_excel(out, index=False)
+        out.seek(0)
+        st.download_button(
+            "📥 Download Excel",
+            out,
+            file_name="profit_result.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
