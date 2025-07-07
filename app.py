@@ -342,7 +342,7 @@ elif tool == "List Split":
 
     pasted_text = st.text_area("Paste your copied data below (from Excel):")
 
-    if pasted_text:
+    if st.button("🔍 Analyze pasted content") and pasted_text:
         try:
             from io import StringIO
             df_input = pd.read_csv(StringIO(pasted_text), sep="\t", header=None)
@@ -350,37 +350,39 @@ elif tool == "List Split":
             st.write("✅ Preview of parsed input:")
             st.dataframe(df_input)
 
-            if st.button("Process List"):
-                records = []
-                for _, row in df_input.iterrows():
-                    order_id = str(row.iloc[0])
-                    product_str = str(row.iloc[-1])
-                    items = [item.strip() for item in product_str.split(',') if '*' in item]
+            records = []
+            for _, row in df_input.iterrows():
+                order_id = str(row.iloc[0])
+                product_str = str(row.iloc[-1])
+                items = [item.strip() for item in product_str.split(',') if '*' in item]
 
-                    for item in items:
-                        try:
-                            qty_str, name = item.split('*', 1)
-                            qty = int(qty_str.strip())
-                            name = name.strip()
-                            records.append({
-                                'name': name,
-                                'order': order_id,
-                                'qty': qty
-                            })
-                        except ValueError:
-                            st.warning(f"⚠️ Skipped malformed item: {item}")
+                for item in items:
+                    try:
+                        qty_str, name = item.split('*', 1)
+                        qty = int(qty_str.strip())
+                        name = name.strip()
+                        records.append({
+                            'name': name,
+                            'order': order_id,
+                            'qty': qty
+                        })
+                    except ValueError:
+                        st.warning(f"⚠️ Skipped malformed item: {item}")
 
-                if records:
-                    df_result = pd.DataFrame(records)
-                    st.success("✅ Processing completed.")
-                    st.dataframe(df_result)
+            if records:
+                df_result = pd.DataFrame(records)
+                st.success("✅ Processing completed.")
+                st.dataframe(df_result)
 
-                    to_download = BytesIO()
-                    df_result.to_excel(to_download, index=False)
-                    to_download.seek(0)
+                to_download = BytesIO()
+                df_result.to_excel(to_download, index=False)
+                to_download.seek(0)
 
-                    st.download_button("📥 Download Excel", to_download, file_name="parsed_list.xlsx")
-                else:
+                st.download_button("📥 Download Excel", to_download, file_name="parsed_list.xlsx")
+            else:
+                st.error("No valid records found. Please check your input.")
+        except Exception as e:
+            st.error(f"❌ Error processing input: {e}")
                     st.error("No valid records found. Please check your input.")
         except Exception as e:
             st.error(f"❌ Error processing input: {e}")
