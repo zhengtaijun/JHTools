@@ -336,6 +336,7 @@ elif tool == "Profit Calculator":
     pass
     pass
 # ========== TOOL 4: List Split ==========
+# ========== TOOL 4: List Split ==========
 elif tool == "List Split":
     st.subheader("📄 List Split")
     st.markdown("Paste copied table data with order number and products. Format: `2*Chair,1*Table`")
@@ -383,6 +384,4 @@ elif tool == "List Split":
                 st.error("No valid records found. Please check your input.")
         except Exception as e:
             st.error(f"❌ Error processing input: {e}")
-                    st.error("No valid records found. Please check your input.")
-        except Exception as e:
-            st.error(f"❌ Error processing input: {e}")
+
