@@ -1,3 +1,4 @@
+# 原始导入保持不变
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -21,7 +22,7 @@ st.caption("© 2025 • App author: **Andy Wang**")
 # ========== SIDEBAR NAVIGATION ==========
 tool = st.sidebar.radio(
     "🧰 Select a tool:",
-    ["TRF Volume Calculator", "Order Merge Tool", "Profit Calculator"],
+    ["TRF Volume Calculator", "Order Merge Tool", "Profit Calculator", "List Split"],
     index=0
 )
 
@@ -101,6 +102,7 @@ if tool == "TRF Volume Calculator":
                 st.download_button("📥 Download Excel", buffer, file_name="TRF_Volume_Result.xlsx")
             except Exception as e:
                 st.error(f"❌ Error: {e}")
+    pass  # 此处省略原代码，完整保留在你现有项目中
 
 # ========== TOOL 2: Order Merge Tool ==========
 elif tool == "Order Merge Tool":
@@ -169,7 +171,7 @@ elif tool == "Order Merge Tool":
                     st.download_button("📥 Download Merged Excel", out, file_name="order_merge.xlsx")
             except Exception as e:
                 st.error(f"❌ Error: {e}")
-
+    pass
 # ========== TOOL 3: Profit Calculator ==========
 elif tool == "Profit Calculator":
     st.subheader("💰 Profit Calculator")
@@ -332,7 +334,7 @@ elif tool == "Profit Calculator":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     pass
-
+    pass
 # ========== TOOL 4: List Split ==========
 elif tool == "List Split":
     st.subheader("📄 List Split")
