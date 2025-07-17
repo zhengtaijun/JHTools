@@ -386,6 +386,7 @@ elif tool == "List Split":
             st.error(f"❌ Error processing input: {e}")
             pass
 # ========== TOOL 5: Image Table Extractor ==========
+# ========== TOOL 5: Image Table Extractor ==========
 elif tool == "Image Table Extractor":
     st.subheader("🖼️ Excel Screenshot to Table")
     st.markdown("Paste (Ctrl+V) or drag a screenshot of an Excel table. Supported formats: JPG, PNG")
@@ -394,29 +395,27 @@ elif tool == "Image Table Extractor":
     import pytesseract
     import re
     import base64
+    import json
     import streamlit.components.v1 as components
 
     uploaded_image = st.file_uploader("Upload Screenshot", type=["jpg", "jpeg", "png"])
 
-    pasted_image_data = st.session_state.get("pasted_image")
+    pasted_image_bytes = st.session_state.get("pasted_image", None)
 
-    # HTML + JS for paste support
+    # Paste listener
+    pasted_image_holder = st.empty()
     components.html('''
         <script>
-        const pasteArea = window.parent.document.body;
-        pasteArea.addEventListener('paste', async (event) => {
-            const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+        document.addEventListener('paste', async function (event) {
+            const items = (event.clipboardData || window.clipboardData).items;
             for (const item of items) {
                 if (item.type.indexOf('image') === 0) {
                     const file = item.getAsFile();
                     const reader = new FileReader();
                     reader.onload = function(event) {
                         const base64Image = event.target.result;
-                        fetch(window.location.href, {
-                            method: "POST",
-                            headers: {"Content-Type": "application/json"},
-                            body: JSON.stringify({"image_data": base64Image})
-                        });
+                        const pyMsg = {type: "paste_image", data: base64Image};
+                        window.parent.postMessage(pyMsg, "*");
                     };
                     reader.readAsDataURL(file);
                 }
@@ -425,39 +424,22 @@ elif tool == "Image Table Extractor":
         </script>
     ''', height=0)
 
-    # Receive base64 image data from JS
-    if 'image_data' not in st.session_state:
-        st.session_state.image_data = None
-
-    import streamlit.runtime.scriptrunner.script_run_context as src
-    from streamlit.runtime.scriptrunner import get_script_run_ctx
-    from streamlit.runtime.state import get_session_state
-
-    ctx = get_script_run_ctx()
-    session_id = ctx.session_id if ctx else None
-
-    if hasattr(st, '_runtime') and hasattr(st._runtime, 'request_queue'):
-        queue = st._runtime.request_queue
-        for r in queue._queue:
-            if r.session.id == session_id:
-                data = r.request.body.decode('utf-8') if hasattr(r.request, 'body') else None
-                if data and 'image_data' in data:
-                    try:
-                        import json
-                        image_json = json.loads(data)
-                        b64data = image_json.get("image_data", "").split(",")[-1]
-                        image_bytes = base64.b64decode(b64data)
-                        pasted_image_data = image_bytes
-                    except:
-                        pass
-                break
+    # Paste upload handler
+    pasted_json = st.experimental_get_query_params().get("pasted_image")
+    if pasted_json:
+        try:
+            imgdata = base64.b64decode(pasted_json[0].split(",")[-1])
+            st.session_state.pasted_image = imgdata
+            st.experimental_set_query_params()  # Clear param after use
+        except:
+            st.warning("Failed to decode pasted image.")
 
     image = None
     if uploaded_image:
         image = Image.open(uploaded_image)
         st.image(image, caption="Uploaded image", use_column_width=True)
-    elif pasted_image_data:
-        image = Image.open(BytesIO(pasted_image_data))
+    elif pasted_image_bytes:
+        image = Image.open(BytesIO(pasted_image_bytes))
         st.image(image, caption="Pasted image", use_column_width=True)
 
     if image:
@@ -503,4 +485,5 @@ elif tool == "Image Table Extractor":
         ''', height=50)
     else:
         st.info("Please upload or paste a screenshot of a table to begin.")
+
 
