@@ -384,4 +384,123 @@ elif tool == "List Split":
                 st.error("No valid records found. Please check your input.")
         except Exception as e:
             st.error(f"❌ Error processing input: {e}")
+            pass
+# ========== TOOL 5: Image Table Extractor ==========
+elif tool == "Image Table Extractor":
+    st.subheader("🖼️ Excel Screenshot to Table")
+    st.markdown("Paste (Ctrl+V) or drag a screenshot of an Excel table. Supported formats: JPG, PNG")
+
+    from PIL import Image
+    import pytesseract
+    import re
+    import base64
+    import streamlit.components.v1 as components
+
+    uploaded_image = st.file_uploader("Upload Screenshot", type=["jpg", "jpeg", "png"])
+
+    pasted_image_data = st.session_state.get("pasted_image")
+
+    # HTML + JS for paste support
+    components.html('''
+        <script>
+        const pasteArea = window.parent.document.body;
+        pasteArea.addEventListener('paste', async (event) => {
+            const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+            for (const item of items) {
+                if (item.type.indexOf('image') === 0) {
+                    const file = item.getAsFile();
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        const base64Image = event.target.result;
+                        fetch(window.location.href, {
+                            method: "POST",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({"image_data": base64Image})
+                        });
+                    };
+                    reader.readAsDataURL(file);
+                }
+            }
+        });
+        </script>
+    ''', height=0)
+
+    # Receive base64 image data from JS
+    if 'image_data' not in st.session_state:
+        st.session_state.image_data = None
+
+    import streamlit.runtime.scriptrunner.script_run_context as src
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+    from streamlit.runtime.state import get_session_state
+
+    ctx = get_script_run_ctx()
+    session_id = ctx.session_id if ctx else None
+
+    if hasattr(st, '_runtime') and hasattr(st._runtime, 'request_queue'):
+        queue = st._runtime.request_queue
+        for r in queue._queue:
+            if r.session.id == session_id:
+                data = r.request.body.decode('utf-8') if hasattr(r.request, 'body') else None
+                if data and 'image_data' in data:
+                    try:
+                        import json
+                        image_json = json.loads(data)
+                        b64data = image_json.get("image_data", "").split(",")[-1]
+                        image_bytes = base64.b64decode(b64data)
+                        pasted_image_data = image_bytes
+                    except:
+                        pass
+                break
+
+    image = None
+    if uploaded_image:
+        image = Image.open(uploaded_image)
+        st.image(image, caption="Uploaded image", use_column_width=True)
+    elif pasted_image_data:
+        image = Image.open(BytesIO(pasted_image_data))
+        st.image(image, caption="Pasted image", use_column_width=True)
+
+    if image:
+        with st.spinner("Running OCR... please wait..."):
+            raw_text = pytesseract.image_to_string(image)
+            lines = raw_text.strip().split("\n")
+            rows = [re.split(r'\t+|\s{2,}', line.strip()) for line in lines if line.strip()]
+            max_len = max((len(row) for row in rows), default=0)
+            rows = [row + [''] * (max_len - len(row)) for row in rows]
+            df = pd.DataFrame(rows)
+
+        st.success("✅ OCR complete. Here's the extracted table:")
+        st.dataframe(df)
+
+        # Download Excel
+        out = BytesIO()
+        df.to_excel(out, index=False, header=False)
+        out.seek(0)
+        st.download_button(
+            "📥 Download as Excel",
+            out,
+            file_name="extracted_table.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        # Copy to clipboard button (tab-separated)
+        def df_to_tsv(df):
+            return '\n'.join(['\t'.join(map(str, row)) for row in df.values.tolist()])
+
+        tsv_string = df_to_tsv(df)
+
+        components.html(f'''
+            <textarea id="tsv" style="position:absolute;left:-1000px">{tsv_string}</textarea>
+            <button onclick="copyTSV()">📋 Copy Table (for Excel/Sheets)</button>
+            <script>
+            function copyTSV() {{
+                const t = document.getElementById("tsv");
+                t.select();
+                document.execCommand("copy");
+                alert("✅ Table copied to clipboard. You can now paste into Excel or Google Sheets.");
+            }}
+            </script>
+        ''', height=50)
+    else:
+        st.info("Please upload or paste a screenshot of a table to begin.")
 
