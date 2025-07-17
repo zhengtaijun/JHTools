@@ -425,12 +425,12 @@ elif tool == "Image Table Extractor":
     ''', height=0)
 
     # Paste upload handler
-    pasted_json = st.experimental_get_query_params().get("pasted_image")
+    pasted_json = st.query_params.get("pasted_image")
     if pasted_json:
         try:
             imgdata = base64.b64decode(pasted_json[0].split(",")[-1])
             st.session_state.pasted_image = imgdata
-            st.experimental_set_query_params()  # Clear param after use
+            st.query_params.clear()  # Clear param after use
         except:
             st.warning("Failed to decode pasted image.")
 
@@ -485,5 +485,6 @@ elif tool == "Image Table Extractor":
         ''', height=50)
     else:
         st.info("Please upload or paste a screenshot of a table to begin.")
+
 
 
