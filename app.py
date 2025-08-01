@@ -188,25 +188,29 @@ elif tool == "Profit Calculator":
     base_costs = []
     service_rates = []
     for i in range(num_products):
-        with cols[i]:
+        st.markdown(f"**Product {i+1}**")
+        col1, col2 = st.columns([2, 1])
+        with col1:
             cost = st.number_input(
-                f"Product {i+1} base cost (excl. GST)",
+                f"Base cost (excl. GST) – Product {i+1}",
                 min_value=0.0,
                 step=0.01,
                 format="%.2f",
-                value=None,  # 不设默认值
-                placeholder="E.g. 289.75",  # 提示文字
+                value=None,
+                placeholder="E.g. 289.75",
                 key=f"base_cost_{i}"
             ) or 0.0
+        with col2:
             rate = st.radio(
-                f"Service Fee Rate (Product {i+1})",
+                f"Service Fee – P{i+1}",
                 ["15%", "5%"],
                 horizontal=True,
                 key=f"rate_{i}"
             )
             rate_val = 0.15 if rate == "15%" else 0.05
-            base_costs.append(cost)
-            service_rates.append(rate_val)
+
+        base_costs.append(cost)
+        service_rates.append(rate_val)
 
     # 计算总成本（含服务费和GST）
     total_base_cost = sum(base_costs)
