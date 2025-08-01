@@ -490,16 +490,11 @@ elif tool == "Image Table Extractor":
         pass
 # ========== TOOL 6: Order Check ==========
 elif tool == "Google Sheet Query":
-    st.subheader("🔎 Google Sheet 查询工具")
+    st.subheader("🔎 Order list 查询工具")
     st.markdown("使用 Google Sheet 作为数据库，进行快速模糊查询。")
 
-    # 设置表格 ID
     SHEET_ID = "17twAYxaakAIbDhQvFR6FdgUVFHxBJlL5w8rrC7gpCu8"
-    SHEET_NAME = "Sheet1"  # 修改为你实际的工作表名称
-
-    # 认证并读取数据
-    import gspread
-    from oauth2client.service_account import ServiceAccountCredentials
+    SHEET_NAME = "Sheet1"  # 你可以改成实际工作表名称
 
     @st.cache_data
     def load_sheet_data():
@@ -508,8 +503,22 @@ elif tool == "Google Sheet Query":
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
-        data = sheet.get_all_records()
-        return pd.DataFrame(data)
+
+        # 获取全部数据（含第一行表头）
+        all_data = sheet.get_all_values()
+        headers = all_data[0]
+        rows = all_data[1:]
+        df = pd.DataFrame(rows, columns=headers)
+
+        # 将列名统一为小写，便于筛选匹配
+        df.columns = [c.strip().lower() for c in df.columns]
+
+        # 只保留目标列
+        target_cols = ["order", "order date", "etd", "name", "photo", "note", "items"]
+        selected_cols = [col for col in df.columns if col in target_cols]
+        df = df[selected_cols]
+
+        return df
 
     try:
         df = load_sheet_data()
