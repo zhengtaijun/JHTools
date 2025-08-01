@@ -178,119 +178,68 @@ elif tool == "Order Merge Tool":
 # ========== TOOL 3: Profit Calculator ==========
 elif tool == "Profit Calculator":
     st.subheader("💰 Profit Calculator")
-    st.caption("All data is calculated locally · Multi-product supported · Created by Andy Wang")
+    st.caption("All data is calculated locally · Multi-product supported · Updated by Andy Wang")
 
-    # 1. Product Cost
-    cost_mode = st.radio(
-        "Input mode:",
-        ["Total order cost", "Individual product cost"],
-        horizontal=True
-    )
-    costs = []
-    if cost_mode == "Total order cost":
-        total_cost = st.number_input(
-            "Total order cost (NZD)",
-            min_value=0.0,
-            step=0.01,
-            format="%.2f",
-            value=None,
-            placeholder="E.g. 350.00"
-        ) or 0.0
-    else:
-        num_products = st.number_input(
-            "Number of products",
-            min_value=1,
-            max_value=20,
-            value=2
-        )
-        cols = st.columns(num_products)
-        for i in range(num_products):
-            c = cols[i].number_input(
-                f"Product {i+1} cost",
+    # 产品数量
+    num_products = st.number_input("Number of products", min_value=1, max_value=20, value=2)
+    cols = st.columns(num_products)
+
+    # 每个产品输入不含税成本 & 服务费百分比
+    base_costs = []
+    service_rates = []
+    for i in range(num_products):
+        with cols[i]:
+            cost = st.number_input(
+                f"Product {i+1} base cost (excl. GST)",
                 min_value=0.0,
                 step=0.01,
                 format="%.2f",
-                value=None,
-                placeholder="E.g. 289.75",
-                key=f"cost_{i}"
+                key=f"base_cost_{i}"
             ) or 0.0
-            costs.append(c)
-        total_cost = sum(costs)
+            rate = st.radio(
+                f"Service Fee Rate (Product {i+1})",
+                ["15%", "5%"],
+                horizontal=True,
+                key=f"rate_{i}"
+            )
+            rate_val = 0.15 if rate == "15%" else 0.05
+            base_costs.append(cost)
+            service_rates.append(rate_val)
 
-    # 2. Product Volume (m³)
-    vol_mode = st.radio(
-        "Input mode:",
-        ["Total volume", "Individual product volume"],
-        horizontal=True
-    )
-    volumes = []
-    if vol_mode == "Total volume":
-        total_volume = st.number_input(
-            "Total volume (m³)",
-            min_value=0.0,
-            step=0.0001,
-            format="%.3f",
-            value=None,
-            placeholder="E.g. 0.75"
-        ) or 0.0
-    else:
-        num_vols = num_products if cost_mode == "Individual product cost" else st.number_input(
-            "Number of volume products",
-            min_value=1,
-            max_value=20,
-            value=2
-        )
-        cols_v = st.columns(num_vols)
-        for i in range(num_vols):
-            v = cols_v[i].number_input(
-                f"Product {i+1} volume",
-                min_value=0.0,
-                step=0.0001,
-                format="%.3f",
-                value=None,
-                placeholder="E.g. 0.15",
-                key=f"volume_{i}"
-            ) or 0.0
-            volumes.append(v)
-        total_volume = sum(volumes)
+    # 计算总成本（含服务费和GST）
+    total_base_cost = sum(base_costs)
+    service_fees = [c * r for c, r in zip(base_costs, service_rates)]
+    cost_with_service = [c + s for c, s in zip(base_costs, service_fees)]
+    total_cost_excl_gst = sum(cost_with_service)
+    total_cost_incl_gst = total_cost_excl_gst * 1.15
 
-    # 3. Shipping Unit Price
-    shipping_unit_price = st.number_input(
-        "Shipping unit price (NZD/m³, GST not included, default 150)",
-        min_value=0.0,
-        step=0.01,
-        format="%.2f",
-        value=150.0
-    )
+    # 运费体积输入
+    total_volume = st.number_input("Total volume (m³)", min_value=0.0, step=0.0001, format="%.3f", placeholder="E.g. 0.75") or 0.0
+    shipping_unit_price = st.number_input("Shipping unit price (NZD/m³, excl. GST)", min_value=0.0, step=0.01, format="%.2f", value=150.0)
+    shipping_cost_excl_gst = total_volume * shipping_unit_price
+    shipping_cost_incl_gst = shipping_cost_excl_gst * 1.15
 
-    # 4. Sale Price
-    sale_price = st.number_input(
-        "Input sale price (GST included, NZD)",
-        min_value=0.0,
-        step=0.01,
-        format="%.2f",
-        value=None,
-        placeholder="E.g. 1200"
-    ) or 0.0
+    # 售价输入（含税）
+    sale_price = st.number_input("Input sale price (GST included, NZD)", min_value=0.0, step=0.01, format="%.2f", placeholder="E.g. 1200") or 0.0
 
-    # Calculations
-    gst_cost = total_cost * 1.15
-    shipping_cost = total_volume * shipping_unit_price
-    shipping_gst = shipping_cost * 1.15
+    # 其他成本
     rent = sale_price * 0.10
-    jcd = sale_price * 0.09
-    total_expense = gst_cost + shipping_gst + rent + jcd
+
+    # 汇总
+    total_expense = total_cost_incl_gst + shipping_cost_incl_gst + rent
     profit_with_gst = sale_price - total_expense
     profit_no_gst = profit_with_gst / 1.15 if profit_with_gst else 0.0
 
     def pct(n):
-        return f"{(n/(sale_price or 1)*100):.2f}" + "%" if sale_price else "-"
+        return f"{(n/(sale_price or 1)*100):.2f}%" if sale_price else "-"
 
+    # 输出表格
     result_rows = [
-        ["COGS", gst_cost, pct(gst_cost)],
-        ["Shipping", shipping_gst, pct(shipping_gst)],
+        ["Base Cost (Sum)", total_base_cost, pct(total_base_cost)],
+        ["Service Fees", sum(service_fees), pct(sum(service_fees))],
+        ["Product Total Cost (incl. GST)", total_cost_incl_gst, pct(total_cost_incl_gst)],
+        ["Shipping (incl. GST)", shipping_cost_incl_gst, pct(shipping_cost_incl_gst)],
         ["Rent (10%)", rent, pct(rent)],
-        ["JCD Cost (9%)", jcd, pct(jcd)],
         ["Total Cost", total_expense, pct(total_expense)],
         ["Profit (incl. GST)", profit_with_gst, pct(profit_with_gst)],
         ["Profit (excl. GST)", profit_no_gst, ""]
@@ -299,33 +248,34 @@ elif tool == "Profit Calculator":
     df_res["Amount (NZD)"] = df_res["Amount (NZD)"].map(lambda x: f"{x:.2f}")
     st.table(df_res)
 
+    # 明细说明
     with st.expander("Calculation details"):
         st.markdown(f"""
-- **Total order cost** = {total_cost:.2f} NZD
-- **COGS** = Total order cost × 1.15 = {gst_cost:.2f} NZD
-- **Total volume** = {total_volume:.3f} m³
-- **Shipping (no GST)** = Total volume × Shipping unit price = {shipping_cost:.2f} NZD
-- **Shipping (GST included)** = Shipping × 1.15 = {shipping_gst:.2f} NZD
-- **COGS & Shipping** = COGS + Shipping = {gst_cost+shipping_gst:.2f} NZD
-- **Rent** = Sale price × 10% = {rent:.2f} NZD
-- **JCD Cost** = Sale price × 9% = {jcd:.2f} NZD
-- **Total cost** = COGS & Shipping + Rent + JCD Cost = {total_expense:.2f} NZD
-- **Profit (incl. GST)** = Sale price - Total cost = {profit_with_gst:.2f} NZD
-- **Profit (excl. GST)** = Profit (incl. GST) / 1.15 = {profit_no_gst:.2f} NZD
-        """
-    )
+- **Base Cost Total** = {total_base_cost:.2f} NZD
+- **Service Fee Total** = {sum(service_fees):.2f} NZD
+- **Cost w/ Service Fee (excl. GST)** = {total_cost_excl_gst:.2f} NZD
+- **Cost w/ GST** = {total_cost_incl_gst:.2f} NZD
+- **Shipping (excl. GST)** = {shipping_cost_excl_gst:.2f} NZD
+- **Shipping (incl. GST)** = {shipping_cost_incl_gst:.2f} NZD
+- **Rent** = {rent:.2f} NZD
+- **Total Expense** = {total_expense:.2f} NZD
+- **Profit (incl. GST)** = {profit_with_gst:.2f} NZD
+- **Profit (excl. GST)** = {profit_no_gst:.2f} NZD
+        """)
 
+    # 饼图
     if sale_price > 0:
         fig, ax = plt.subplots()
         ax.pie(
-            [gst_cost, shipping_gst, rent, jcd, max(profit_with_gst, 0)],
-            labels=["COGS", "Shipping", "Rent", "JCD", "Profit"],
+            [total_cost_incl_gst, shipping_cost_incl_gst, rent, max(profit_with_gst, 0)],
+            labels=["Product Cost", "Shipping", "Rent", "Profit"],
             autopct="%1.1f%%",
             startangle=90
         )
         ax.axis("equal")
         st.pyplot(fig)
 
+    # 导出 Excel
     if st.button("Export results to Excel"):
         out = BytesIO()
         df_res.to_excel(out, index=False)
@@ -336,7 +286,6 @@ elif tool == "Profit Calculator":
             file_name="profit_result.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-    pass
     pass
 # ========== TOOL 4: List Split ==========
 # ========== TOOL 4: List Split ==========
