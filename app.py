@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 from io import BytesIO
 import requests
 from PIL import Image
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import json
 
 # ========== GLOBAL CONFIG ==========
 favicon = Image.open("favicon.png")
@@ -501,7 +504,8 @@ elif tool == "Google Sheet Query":
     @st.cache_data
     def load_sheet_data():
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+        creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
         data = sheet.get_all_records()
