@@ -386,7 +386,6 @@ elif tool == "List Split":
             st.error(f"❌ Error processing input: {e}")
             pass
 # ========== TOOL 5: Image Table Extractor ==========
-# ========== TOOL 5: Image Table Extractor ==========
 elif tool == "Image Table Extractor":
     st.subheader("🖼️ Excel Screenshot to Table")
     st.markdown("Paste (Ctrl+V) or drag a screenshot of an Excel table. Supported formats: JPG, PNG")
@@ -485,6 +484,46 @@ elif tool == "Image Table Extractor":
         ''', height=50)
     else:
         st.info("Please upload or paste a screenshot of a table to begin.")
+        pass
+# ========== TOOL 6: Order Check ==========
+elif tool == "Google Sheet Query":
+    st.subheader("🔎 Google Sheet 查询工具")
+    st.markdown("使用 Google Sheet 作为数据库，进行快速模糊查询。")
+
+    # 设置表格 ID
+    SHEET_ID = "17twAYxaakAIbDhQvFR6FdgUVFHxBJlL5w8rrC7gpCu8"
+    SHEET_NAME = "Sheet1"  # 修改为你实际的工作表名称
+
+    # 认证并读取数据
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+
+    @st.cache_data
+    def load_sheet_data():
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
+        data = sheet.get_all_records()
+        return pd.DataFrame(data)
+
+    try:
+        df = load_sheet_data()
+        st.success("✅ 表格加载成功！")
+        st.dataframe(df.head(10))
+
+        query = st.text_input("🔍 输入关键词（模糊匹配所有列）:")
+
+        if query:
+            filtered = df[df.apply(lambda row: row.astype(str).str.contains(query, case=False).any(), axis=1)]
+            st.markdown(f"🔎 **共找到 {len(filtered)} 条匹配结果：**")
+            st.dataframe(filtered)
+        else:
+            st.info("请输入关键词开始查询。")
+
+    except Exception as e:
+        st.error(f"❌ 加载 Google Sheet 失败：{e}")
+        
 
 
 
