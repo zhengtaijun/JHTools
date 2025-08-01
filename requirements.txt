@@ -6,3 +6,5 @@ rapidfuzz>=3.6.1
 matplotlib>=3.8.4
 Pillow>=10.3.0
 pytesseract
+gspread
+oauth2client
