@@ -526,14 +526,16 @@ elif tool == "Google Sheet Query":
             st.warning("⚠️ 表格为空或数据加载失败。")
         else:
             st.success("✅ 表格加载成功！")
-            st.dataframe(df.head(10))
+            
+            with st.expander("📋 显示全部数据（可选）", expanded=False):
+                st.dataframe(df, use_container_width=True)
 
             query = st.text_input("🔍 输入关键词（模糊匹配所有列）:")
 
             if query:
                 filtered = df[df.apply(lambda row: row.astype(str).str.contains(query, case=False).any(), axis=1)]
                 st.markdown(f"🔎 **共找到 {len(filtered)} 条匹配结果：**")
-                st.dataframe(filtered)
+                st.dataframe(filtered, use_container_width=True)
             else:
                 st.info("请输入关键词开始查询。")
 
