@@ -181,7 +181,7 @@ elif tool == "Profit Calculator":
     st.caption("All data is calculated locally · Multi-product supported · Updated by Andy Wang")
 
     # 产品数量
-    num_products = st.number_input("Number of products", min_value=1, max_value=20, value=2)
+    num_products = st.number_input("Number of products", min_value=1, max_value=20, value=1)
     cols = st.columns(num_products)
 
     # 每个产品输入不含税成本 & 服务费百分比
@@ -194,6 +194,8 @@ elif tool == "Profit Calculator":
                 min_value=0.0,
                 step=0.01,
                 format="%.2f",
+                value=None,  # 不设默认值
+                placeholder="E.g. 289.75",  # 提示文字
                 key=f"base_cost_{i}"
             ) or 0.0
             rate = st.radio(
@@ -220,7 +222,7 @@ elif tool == "Profit Calculator":
     shipping_cost_incl_gst = shipping_cost_excl_gst * 1.15
 
     # 售价输入（含税）
-    sale_price = st.number_input("Input sale price (GST included, NZD)", min_value=0.0, step=0.01, format="%.2f", placeholder="E.g. 1200") or 0.0
+    sale_price = st.number_input("Input sale price (GST included, NZD)", min_value=0.0, step=0.01, format="%.2f", value=None, placeholder="E.g. 1200") or 0.0
 
     # 其他成本
     rent = sale_price * 0.10
