@@ -133,6 +133,7 @@ if tool == "TRF Volume Calculator":
     col_qty = st.number_input("Column # of **Quantity**", min_value=1, value=8)
 
     # ===================== 多阶段匹配（带缓存） =====================
+    # ===================== 多阶段匹配（带前缀权重 + 缓存） =====================
     @lru_cache(maxsize=4096)
     def match_product(name: str):
         if not name:
@@ -155,15 +156,29 @@ if tool == "TRF Volume Calculator":
         if got is not None:
             return got
 
-        # Stage 3a: 模糊 token_set（更鲁棒）
+        # ---------- Stage 3a: 前缀优先模糊 ----------
+        tokens = n_norm.split()
+        prefix = " ".join(tokens[:3]) if len(tokens) >= 3 else " ".join(tokens)
+        if prefix:
+            m_prefix = process.extractOne(
+                prefix,
+                [ " ".join(t.split()[:3]) for t in idx["names_norm_list"] ],
+                scorer=fuzz.token_set_ratio,
+                score_cutoff=90
+            )
+            if m_prefix:
+                _, _, matched_idx = m_prefix
+                return idx["cbms_all"][matched_idx]
+
+        # ---------- Stage 3b: 全名模糊（token_set_ratio） ----------
         m1 = process.extractOne(
-            n_norm, idx["names_norm_list"], scorer=fuzz.token_set_ratio, score_cutoff=90
+            n_norm, idx["names_norm_list"], scorer=fuzz.token_set_ratio, score_cutoff=88
         )
         if m1:
             _, _, matched_idx = m1
             return idx["cbms_all"][matched_idx]
 
-        # Stage 3b: 退回 partial_ratio
+        # ---------- Stage 3c: partial_ratio 兜底 ----------
         m2 = process.extractOne(
             n_norm, idx["names_norm_list"], scorer=fuzz.partial_ratio, score_cutoff=85
         )
