@@ -11,6 +11,9 @@ from PIL import Image
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
+import re
+from functools import lru_cache
+from rapidfuzz import process, fuzz
 
 # ========== GLOBAL CONFIG ==========
 favicon = Image.open("favicon.png")
@@ -38,62 +41,177 @@ if tool == "TRF Volume Calculator":
         "https://raw.githubusercontent.com/zhengtaijun/JHCH_TRF-Volume/main/product_info.xlsx"
     )
 
+    # ===================== 统一标准化与别名归一 =====================
+
+    _WS_RE = re.compile(r"\s+")
+    _PUNCT_RE = re.compile(r"[^a-z0-9]+")
+
+    # 可按你的库继续扩充变体（左：规范词 右：可能写法）
+    ALIASES = {
+        "drawer": ["drawers", "drw", "drws"],
+        "tallboy": ["tall boy", "tall-boy"],
+        # 尺寸/型号常见缩写（示例）
+        "queen": ["qn", "qs", "queen-size", "queen size"],
+        "king": ["kg", "ks", "king-size", "king size"],
+    }
+
+    def _apply_aliases(tokens):
+        out = []
+        for t in tokens:
+            replaced = False
+            for canon, variants in ALIASES.items():
+                if t == canon or t in variants:
+                    out.append(canon)
+                    replaced = True
+                    break
+            if not replaced:
+                out.append(t)
+        return out
+
+    def normalize(s: str) -> str:
+        s = s.strip().lower()
+        s = _PUNCT_RE.sub(" ", s)      # 去标点
+        s = _WS_RE.sub(" ", s)         # 合并空格
+        tokens = s.split()
+        tokens = _apply_aliases(tokens) # 同义词归一
+        return " ".join(tokens)
+
+    def fingerprint(s: str) -> str:
+        # 去重 + 排序，弱化词序与重复的影响
+        toks = normalize(s).split()
+        return " ".join(sorted(set(toks)))
+
+    # ===================== 读取产品信息并建立多索引 =====================
     @st.cache_data
-    def load_product_info():
-        response = requests.get(PRODUCT_INFO_URL)
-        response.raise_for_status()
-        df = pd.read_excel(BytesIO(response.content))
+    def load_product_info_and_build_index():
+        resp = requests.get(PRODUCT_INFO_URL)
+        resp.raise_for_status()
+        df = pd.read_excel(BytesIO(resp.content))
+
         with st.expander("✅ Product-info file loaded. Click to view columns", expanded=False):
             st.write(df.columns.tolist())
+
         if {"Product Name", "CBM"} - set(df.columns):
             raise ValueError("`Product Name` and `CBM` columns are required.")
-        names = df["Product Name"].fillna("").astype(str)
-        cbms = pd.to_numeric(df["CBM"], errors="coerce").fillna(0)
-        return dict(zip(names.tolist(), cbms.tolist())), names.tolist()
 
-    product_dict, product_names_all = load_product_info()
+        names = df["Product Name"].fillna("").astype(str).tolist()
+        cbms = pd.to_numeric(df["CBM"], errors="coerce").fillna(0).tolist()
 
+        # 原始字典（最快路径）
+        product_dict_raw = dict(zip(names, cbms))
+
+        # 规范化与指纹索引
+        norm_index = {}
+        fp_index = {}
+
+        # 供模糊匹配使用的并行列表（与 names/cbms 对齐）
+        names_norm_list = []
+
+        for n, c in zip(names, cbms):
+            n_norm = normalize(n)
+            n_fp = " ".join(sorted(set(n_norm.split())))
+            norm_index[n_norm] = c
+            fp_index[n_fp] = c
+            names_norm_list.append(n_norm)
+
+        return {
+            "df": df,
+            "product_dict_raw": product_dict_raw,
+            "norm_index": norm_index,
+            "fp_index": fp_index,
+            "names_norm_list": names_norm_list,
+            "names_all": names,
+            "cbms_all": cbms,
+        }
+
+    idx = load_product_info_and_build_index()
+
+    # ===================== 文件上传与列位设置 =====================
     warehouse_file = st.file_uploader("Upload warehouse export (Excel)", type=["xlsx"])
     col_prod = st.number_input("Column # of **Product Name**", min_value=1, value=3)
     col_order = st.number_input("Column # of **Order Number**", min_value=1, value=7)
     col_qty = st.number_input("Column # of **Quantity**", min_value=1, value=8)
 
+    # ===================== 多阶段匹配（带缓存） =====================
+    @lru_cache(maxsize=4096)
     def match_product(name: str):
-        if name in product_dict:
-            return product_dict[name]
-        match, score, _ = process.extractOne(name, product_names_all, scorer=fuzz.partial_ratio)
-        return product_dict[match] if score >= 80 else None
+        if not name:
+            return None
 
+        # Stage 0: 原文精确
+        raw = idx["product_dict_raw"].get(name)
+        if raw is not None:
+            return raw
+
+        # Stage 1: 规范化精确
+        n_norm = normalize(name)
+        got = idx["norm_index"].get(n_norm)
+        if got is not None:
+            return got
+
+        # Stage 2: token 指纹精确
+        n_fp = " ".join(sorted(set(n_norm.split())))
+        got = idx["fp_index"].get(n_fp)
+        if got is not None:
+            return got
+
+        # Stage 3a: 模糊 token_set（更鲁棒）
+        m1 = process.extractOne(
+            n_norm, idx["names_norm_list"], scorer=fuzz.token_set_ratio, score_cutoff=90
+        )
+        if m1:
+            _, _, matched_idx = m1
+            return idx["cbms_all"][matched_idx]
+
+        # Stage 3b: 退回 partial_ratio
+        m2 = process.extractOne(
+            n_norm, idx["names_norm_list"], scorer=fuzz.partial_ratio, score_cutoff=85
+        )
+        if m2:
+            _, _, matched_idx = m2
+            return idx["cbms_all"][matched_idx]
+
+        return None  # 未命中
+
+    # ===================== 体积计算流程（含并行） =====================
     def process_volume_file(file, p_col, q_col):
-        df = pd.read_excel(file)
-        product_names = df.iloc[:, p_col].fillna("").astype(str).tolist()
-        quantities = pd.to_numeric(df.iloc[:, q_col], errors="coerce").fillna(0)
+        dfw = pd.read_excel(file)
+        product_names = dfw.iloc[:, p_col].fillna("").astype(str).tolist()
+        quantities = pd.to_numeric(dfw.iloc[:, q_col], errors="coerce").fillna(0)
 
         total = len(product_names)
-        volumes = []
+        volumes = [None] * total
 
         def worker(start: int, end: int):
-            partial = []
+            out = []
             for i in range(start, end):
-                name = product_names[i].strip()
-                vol = match_product(name) if name else None
-                partial.append(vol)
-            return partial
+                nm = product_names[i].strip()
+                vol = match_product(nm) if nm else None
+                out.append(vol)
+            return out
 
+        from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=4) as pool:
             chunk = max(total // 4, 1)
-            futures = [pool.submit(worker, i * chunk, (i + 1) * chunk if i < 3 else total) for i in range(4)]
+            futures = [
+                pool.submit(worker, i * chunk, (i + 1) * chunk if i < 3 else total)
+                for i in range(4)
+            ]
+            pos = 0
             for f in futures:
-                volumes.extend(f.result())
+                batch = f.result()
+                volumes[pos : pos + len(batch)] = batch
+                pos += len(batch)
 
-        df["Volume"] = pd.to_numeric(pd.Series(volumes), errors="coerce").fillna(0)
-        df["Total Volume"] = df["Volume"] * quantities
-        df = pd.concat([
-            df,
-            pd.DataFrame({"Total Volume": [df["Total Volume"].sum()]})
-        ], ignore_index=True)
-        return df
+        dfw["Volume"] = pd.to_numeric(pd.Series(volumes), errors="coerce").fillna(0)
+        dfw["Total Volume"] = dfw["Volume"] * quantities
 
+        # 最后一行汇总
+        summary = pd.DataFrame({"Total Volume": [dfw["Total Volume"].sum()]})
+        dfw = pd.concat([dfw, summary], ignore_index=True)
+        return dfw
+
+    # ===================== 触发计算与下载 =====================
     if warehouse_file and st.button("Calculate volume"):
         with st.spinner("Processing…"):
             try:
@@ -105,7 +223,8 @@ if tool == "TRF Volume Calculator":
                 st.download_button("📥 Download Excel", buffer, file_name="TRF_Volume_Result.xlsx")
             except Exception as e:
                 st.error(f"❌ Error: {e}")
-    pass  # 此处省略原代码，完整保留在你现有项目中
+
+    pass
 
 # ========== TOOL 2: Order Merge Tool ==========
 elif tool == "Order Merge Tool":
