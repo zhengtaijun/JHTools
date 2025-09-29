@@ -600,58 +600,59 @@ elif tool == "Order Merge Tool V2":
         return missing
 
     if file:
-        try:
+    try:
         # 读取：自动兼容 .xlsx / .xls / HTML伪Excel / 误扩展CSV/TSV
         raw_df, converted = read_excel_any(file, dtype=str, return_converted_bytes=True)
 
         # 若自动发生了格式转换，给出提示与下载按钮
-            if converted:
-                st.info("🔁 检测到 HTML/CSV 伪装的 Excel，已自动转换为真实 .xlsx。")
-                st.download_button(
+        if converted:
+            st.info("🔁 检测到 HTML/CSV 伪装的 Excel，已自动转换为真实 .xlsx。")
+            st.download_button(
                 "📥 下载自动转换的 .xlsx",
-                    converted,
-                    file_name="converted.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                converted,
+                file_name="converted.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
         # 尝试解析 DateCreated（后续 consolidate 仍有兜底）
-            if "DateCreated" in raw_df.columns:
-                try:
+        if "DateCreated" in raw_df.columns:
+            try:
                 raw_df["DateCreated"] = pd.to_datetime(raw_df["DateCreated"], errors="coerce")
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
         # 列校验
-            missing = validate_columns(raw_df)
-            if missing:
-                st.error("❌ 缺少以下必要列，请在原表中补齐后再上传：\n\n- " + "\n- ".join(missing))
-            else:
-                with st.spinner("Processing…"):
-                    merged = consolidate(raw_df)
+        missing = validate_columns(raw_df)
+        if missing:
+            st.error("❌ 缺少以下必要列，请在原表中补齐后再上传：\n\n- " + "\n- ".join(missing))
+        else:
+            with st.spinner("Processing…"):
+                merged = consolidate(raw_df)
 
-                st.success(f"✅ 处理完成，共 {len(merged)} 条订单（每个 OrderNumber 一行）。")
-                st.dataframe(merged.head(50), use_container_width=True)  # 预览前 50 行
+            st.success(f"✅ 处理完成，共 {len(merged)} 条订单（每个 OrderNumber 一行）。")
+            st.dataframe(merged.head(50), use_container_width=True)  # 预览前 50 行
 
             # 下载结果
-                out = BytesIO()
-                with pd.ExcelWriter(out, engine="xlsxwriter",
-                                    datetime_format="yyyy-mm-dd", date_format="yyyy-mm-dd") as writer:
-                    merged.to_excel(writer, index=False, sheet_name="Consolidated")
-                out.seek(0)
+            out = BytesIO()
+            with pd.ExcelWriter(out, engine="xlsxwriter",
+                                datetime_format="yyyy-mm-dd", date_format="yyyy-mm-dd") as writer:
+                merged.to_excel(writer, index=False, sheet_name="Consolidated")
+            out.seek(0)
 
-                st.download_button(
-                    "📥 Download Merged Excel",
-                    data=out,
-                    file_name="order_merge_v2.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            st.download_button(
+                "📥 Download Merged Excel",
+                data=out,
+                file_name="order_merge_v2.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
-        except RuntimeError as e:
+    except RuntimeError as e:
         # 我们在 read_excel_any 里抛出的用户可读错误（如 HTML 无表格等）
-            st.error(f"❌ {e}")
-        except Exception as e:
-            # 其他未预期错误
-            st.error(f"❌ Error: {e}")
+        st.error(f"❌ {e}")
+    except Exception as e:
+        # 其他未预期错误
+        st.error(f"❌ Error: {e}")
+
 
         pass
 # ========== TOOL 3: Profit Calculator ==========
