@@ -599,7 +599,7 @@ elif tool == "Order Merge Tool V2":
         missing = [c for c in REQUIRED_COLS if c not in df.columns]
         return missing
 
-    if file:
+if file:
     try:
         # 读取：自动兼容 .xlsx / .xls / HTML伪Excel / 误扩展CSV/TSV
         raw_df, converted = read_excel_any(file, dtype=str, return_converted_bytes=True)
@@ -652,6 +652,7 @@ elif tool == "Order Merge Tool V2":
     except Exception as e:
         # 其他未预期错误
         st.error(f"❌ Error: {e}")
+
 
 
         pass
@@ -976,7 +977,3 @@ elif tool == "Google Sheet Query":
 
     except Exception as e:
         st.error(f"❌ 加载 Google Sheet 失败：{e}")
-
-
-
-
