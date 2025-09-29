@@ -17,6 +17,7 @@ from rapidfuzz import process, fuzz
 
 
 
+# -------- Robust Excel/HTML/CSV loader --------
 def _ensure_xlrd_ok():
     try:
         import xlrd
@@ -35,69 +36,57 @@ def read_excel_any(file_obj, **kwargs) -> pd.DataFrame:
     """
     name = (getattr(file_obj, "name", "") or "").lower()
 
-    # 读原始字节，便于多次尝试
     raw = file_obj.read() if hasattr(file_obj, "read") else file_obj
     if not isinstance(raw, (bytes, bytearray)):
         try:
             file_obj.seek(0)
             raw = file_obj.read()
         except Exception:
-            # 最后兜底：直接丢给 pandas
             return pd.read_excel(file_obj, **kwargs)
 
     data = bytes(raw)
-    head = data[:64]  # 够用来嗅探
+    head = data[:64]
 
     def as_bio():
         return BytesIO(data)
 
-    # -------- 1) HTML 伪装的 .xls/.xlsx --------
-    # 常见开头：<html ...>、<!DOCTYPE html> 等
+    # 1) HTML disguised as Excel
     if head.lstrip().lower().startswith((b"<html", b"<!doctype html")):
-        # 很多 ERP/下载链接会返回登录页/错误页，这里尝试抽第一个表格
         try:
             tables = pd.read_html(as_bio())
             if not tables:
                 raise ValueError("No table found in HTML.")
             return tables[0]
         except Exception as e:
-            # 给调用方一个更友好的提示
-            raise RuntimeError("上传的文件是 HTML 页面（可能是系统导出的网页或下载失败的登录/错误页）。"
-                               "请导出为真正的 Excel，或复制表格到 Excel 另存为 .xlsx。") from e
+            raise RuntimeError(
+                "上传的文件其实是 HTML 页面（常见于系统导出的‘网页伪装xls’或下载到登录/错误页）。"
+                "请在 Excel 打开后另存为 .xlsx 再上传。"
+            ) from e
 
-    # -------- 2) 真 .xlsx（zip 头：PK\x03\x04）--------
+    # 2) True .xlsx (ZIP header)
     if head.startswith(b"PK\x03\x04"):
-        # openpyxl
         try:
             return pd.read_excel(as_bio(), engine="openpyxl", **kwargs)
         except Exception:
-            # 让 pandas 默认再试一次
             return pd.read_excel(as_bio(), **kwargs)
 
-    # -------- 3) 真 .xls（OLE2 头：D0 CF 11 E0 A1 B1 1A E1）--------
+    # 3) True .xls (OLE2 header) or name endswith .xls
     if head.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1") or name.endswith(".xls"):
         _ensure_xlrd_ok()
         return pd.read_excel(as_bio(), engine="xlrd", **kwargs)
 
-    # -------- 4) 文本 CSV/TSV 误扩展 --------
-    # 简单启发：文本且包含逗号或制表符，且有多行
+    # 4) CSV/TSV mislabeled
     text_sample = data[:4096].decode("utf-8", errors="ignore")
     if ("\t" in text_sample or "," in text_sample) and ("\n" in text_sample or "\r" in text_sample):
-        # 试 TSV 优先（Excel复制常见），否则 CSV
-        sep = "\t" if "\t" in text_sample and text_sample.count("\t") >= text_sample.count(",") else ","
+        sep = "\t" if text_sample.count("\t") >= text_sample.count(",") else ","
         try:
             return pd.read_csv(BytesIO(data), sep=sep)
         except Exception:
-            pass  # 继续兜底
+            pass
 
-    # -------- 5) 兜底：交给 pandas 猜 --------
-    try:
-        return pd.read_excel(as_bio(), **kwargs)
-    except Exception as e:
-        raise RuntimeError(
-            "无法识别的文件格式。请确认文件为 .xlsx/.xls，或将其另存为 .xlsx 再上传。\n"
-            f"原始错误：{e}"
-        )
+    # 5) Fallback
+    return pd.read_excel(as_bio(), **kwargs)
+
 
 
 # ========== GLOBAL CONFIG ==========
