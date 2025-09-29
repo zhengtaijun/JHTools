@@ -86,7 +86,7 @@ if tool == "TRF Volume Calculator":
     def load_product_info_and_build_index():
         resp = requests.get(PRODUCT_INFO_URL)
         resp.raise_for_status()
-        df = pd.read_excel(BytesIO(resp.content))
+        df = read_excel_any(BytesIO(resp.content))
 
         with st.expander("✅ Product-info file loaded. Click to view columns", expanded=False):
             st.write(df.columns.tolist())
@@ -127,7 +127,7 @@ if tool == "TRF Volume Calculator":
     idx = load_product_info_and_build_index()
 
     # ===================== 文件上传与列位设置 =====================
-    warehouse_file = st.file_uploader("Upload warehouse export (Excel)", type=["xlsx"])
+    warehouse_file = st.file_uploader("Upload warehouse export (Excel)", type=["xlsx","xls"])
     col_prod = st.number_input("Column # of **Product Name**", min_value=1, value=3)
     col_order = st.number_input("Column # of **Order Number**", min_value=1, value=7)
     col_qty = st.number_input("Column # of **Quantity**", min_value=1, value=8)
@@ -190,7 +190,7 @@ if tool == "TRF Volume Calculator":
 
     # ===================== 体积计算流程（含并行） =====================
     def process_volume_file(file, p_col, q_col):
-        dfw = pd.read_excel(file)
+        dfw = read_excel_any(file)
         product_names = dfw.iloc[:, p_col].fillna("").astype(str).tolist()
         quantities = pd.to_numeric(dfw.iloc[:, q_col], errors="coerce").fillna(0)
 
@@ -246,8 +246,8 @@ elif tool == "Order Merge Tool":
     st.subheader("📋 Order Merge Tool")
     st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/instructions.md)")
 
-    file1 = st.file_uploader("Upload File 1", type=["xlsx"], key="merge1")
-    file2 = st.file_uploader("Upload File 2", type=["xlsx"], key="merge2")
+    file1 = st.file_uploader("Upload File 1", type=["xlsx","xls"], key="merge1")
+    file2 = st.file_uploader("Upload File 2", type=["xlsx","xls"], key="merge2")
 
     def clean_phone(num):
         if pd.notna(num):
@@ -263,7 +263,7 @@ elif tool == "Order Merge Tool":
         return (inv_date + timedelta(days=days)).date()
 
     def process_merge(f1, f2):
-        df1, df2 = pd.read_excel(f1), pd.read_excel(f2)
+        df1, df2 = read_excel_any(f1), read_excel_any(f2)
         has1, has2 = "Freight Ex" in df1.columns, "Freight Ex" in df2.columns
         if has1 and has2:
             st.error("Both files contain **Freight Ex**; only one should.")
@@ -322,7 +322,7 @@ elif tool == "Order Merge Tool V2":
         "- 其他列位置、标记规则严格按规范生成\n"
     )
 
-    file = st.file_uploader("Upload the Excel file (old layout)", type=["xlsx"], key="order_merge_v2")
+    file = st.file_uploader("Upload the Excel file (old layout)", type=["xlsx","xls"], key="order_merge_v2")
 
     import re
     import pandas as pd
@@ -515,7 +515,7 @@ elif tool == "Order Merge Tool V2":
 
     if file:
         try:
-            raw_df = pd.read_excel(file, dtype=str)
+            raw_df = read_excel_any(file, dtype=str)
             # 尝试给 DateCreated 单独解析，后续 consolidate 会再次兜底
             if "DateCreated" in raw_df.columns:
                 try:
