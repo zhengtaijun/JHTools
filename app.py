@@ -14,57 +14,90 @@ import json
 import re
 from functools import lru_cache
 from rapidfuzz import process, fuzz
-from io import BytesIO
 
-# -------- Excel loader (supports .xlsx + .xls) --------
+
+
+def _ensure_xlrd_ok():
+    try:
+        import xlrd
+        parts = tuple(int(p) for p in xlrd.__version__.split(".")[:3])
+        if parts < (2, 0, 1):
+            raise RuntimeError(f"xlrd {xlrd.__version__} too old; please upgrade to xlrd>=2.0.1")
+    except ImportError:
+        raise RuntimeError("xlrd not installed; please `pip install xlrd>=2.0.1`")
+
 def read_excel_any(file_obj, **kwargs) -> pd.DataFrame:
     """
-    Robust reader for both .xlsx and .xls uploaded via Streamlit.
-    Tries pandas default, then falls back to engine-specific attempts.
-    kwargs are passed to pandas.read_excel (e.g., dtype=str).
+    Reads .xlsx/.xls properly, and also handles:
+      - HTML tables saved as .xls/.xlsx (uses pd.read_html)
+      - CSV/TSV misnamed as .xls/.xlsx (fallback to read_csv)
+    kwargs are passed to pandas.read_excel when used.
     """
-    name = getattr(file_obj, "name", "").lower()
-    # Read bytes once so we can retry with different engines
+    name = (getattr(file_obj, "name", "") or "").lower()
+
+    # 读原始字节，便于多次尝试
     raw = file_obj.read() if hasattr(file_obj, "read") else file_obj
-    if isinstance(raw, bytes):
-        data = raw
-    else:
-        # If it's already bytes-like buffer
+    if not isinstance(raw, (bytes, bytearray)):
         try:
-            raw.seek(0)
-            data = raw.read()
+            file_obj.seek(0)
+            raw = file_obj.read()
         except Exception:
-            # as a last resort, let pandas try directly
+            # 最后兜底：直接丢给 pandas
             return pd.read_excel(file_obj, **kwargs)
 
-    engines = []
-    if name.endswith(".xls"):
-        engines = [None, "xlrd"]  # xlrd required for .xls
-    else:
-        engines = [None, "openpyxl"]  # openpyxl for .xlsx
+    data = bytes(raw)
+    head = data[:64]  # 够用来嗅探
 
-    last_err = None
-    for eng in engines:
+    def as_bio():
+        return BytesIO(data)
+
+    # -------- 1) HTML 伪装的 .xls/.xlsx --------
+    # 常见开头：<html ...>、<!DOCTYPE html> 等
+    if head.lstrip().lower().startswith((b"<html", b"<!doctype html")):
+        # 很多 ERP/下载链接会返回登录页/错误页，这里尝试抽第一个表格
         try:
-            bio = BytesIO(data)
-            if eng is None:
-                return pd.read_excel(bio, **kwargs)
-            else:
-                return pd.read_excel(bio, engine=eng, **kwargs)
+            tables = pd.read_html(as_bio())
+            if not tables:
+                raise ValueError("No table found in HTML.")
+            return tables[0]
         except Exception as e:
-            last_err = e
-            continue
+            # 给调用方一个更友好的提示
+            raise RuntimeError("上传的文件是 HTML 页面（可能是系统导出的网页或下载失败的登录/错误页）。"
+                               "请导出为真正的 Excel，或复制表格到 Excel 另存为 .xlsx。") from e
 
-    # final fallback: try both engines if not already tried
-    for eng in ["openpyxl", "xlrd"]:
+    # -------- 2) 真 .xlsx（zip 头：PK\x03\x04）--------
+    if head.startswith(b"PK\x03\x04"):
+        # openpyxl
         try:
-            bio = BytesIO(data)
-            return pd.read_excel(bio, engine=eng, **kwargs)
-        except Exception as e:
-            last_err = e
-            continue
+            return pd.read_excel(as_bio(), engine="openpyxl", **kwargs)
+        except Exception:
+            # 让 pandas 默认再试一次
+            return pd.read_excel(as_bio(), **kwargs)
 
-    raise last_err if last_err else RuntimeError("Failed to read Excel file.")
+    # -------- 3) 真 .xls（OLE2 头：D0 CF 11 E0 A1 B1 1A E1）--------
+    if head.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1") or name.endswith(".xls"):
+        _ensure_xlrd_ok()
+        return pd.read_excel(as_bio(), engine="xlrd", **kwargs)
+
+    # -------- 4) 文本 CSV/TSV 误扩展 --------
+    # 简单启发：文本且包含逗号或制表符，且有多行
+    text_sample = data[:4096].decode("utf-8", errors="ignore")
+    if ("\t" in text_sample or "," in text_sample) and ("\n" in text_sample or "\r" in text_sample):
+        # 试 TSV 优先（Excel复制常见），否则 CSV
+        sep = "\t" if "\t" in text_sample and text_sample.count("\t") >= text_sample.count(",") else ","
+        try:
+            return pd.read_csv(BytesIO(data), sep=sep)
+        except Exception:
+            pass  # 继续兜底
+
+    # -------- 5) 兜底：交给 pandas 猜 --------
+    try:
+        return pd.read_excel(as_bio(), **kwargs)
+    except Exception as e:
+        raise RuntimeError(
+            "无法识别的文件格式。请确认文件为 .xlsx/.xls，或将其另存为 .xlsx 再上传。\n"
+            f"原始错误：{e}"
+        )
 
 
 # ========== GLOBAL CONFIG ==========
