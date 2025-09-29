@@ -8,3 +8,4 @@ Pillow>=10.3.0
 pytesseract
 gspread
 oauth2client
+xlrd==1.2.0
