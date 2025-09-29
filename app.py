@@ -28,7 +28,7 @@ st.caption("© 2025 • App author: **Andy Wang**")
 # ========== SIDEBAR NAVIGATION ==========
 tool = st.sidebar.radio(
     "🧰 Select a tool:",
-    ["TRF Volume Calculator", "Order Merge Tool", "Profit Calculator", "List Split", "Image Table Extractor", "Google Sheet Query"],
+    ["TRF Volume Calculator", "Order Merge Tool", "Order Merge Tool V2", "Profit Calculator", "List Split", "Image Table Extractor", "Google Sheet Query"],
     index=0
 )
 
