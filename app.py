@@ -63,13 +63,27 @@ def read_excel_any(file_obj, return_converted_bytes: bool = False, **kwargs):
     def as_bio():
         return BytesIO(data)
 
-    # 1) HTML 伪装的“Excel”
+    # 1) # HTML 伪装的“Excel”
     if head.lstrip().lower().startswith((b"<html", b"<!doctype html")):
-        # 解析第一张表
-        tables = pd.read_html(as_bio())
+        # 用 read_html 抓取表格，强制不要把第一行当 header
+        tables = pd.read_html(as_bio(), header=None)
         if not tables:
             raise RuntimeError("HTML 文件中未发现可解析的表格。请导出为真正的 Excel。")
+
         df = tables[0]
+
+        # 如果第一列是 0,1,2 这种数字，第二行才是真正表头
+        # 可以检测：df.iloc[0] 中是否包含关键字段
+        expected_cols = {
+            "DateCreated","OrderNumber","OrderStatus","Product_Description","Size",
+            "Colour","CustomerName","Phone","Mobile","DeliveryMode",
+            "PublicComments","qtyRequired","SourceFrom"
+        }
+        if any(x in expected_cols for x in df.iloc[0].astype(str).tolist()):
+            # 把第一行设为列名
+            df.columns = df.iloc[0]
+            df = df.drop(df.index[0]).reset_index(drop=True)
+
         conv = _to_xlsx_bytes(df) if return_converted_bytes else None
         return (df, conv) if return_converted_bytes else df
 
@@ -410,11 +424,6 @@ elif tool == "Order Merge Tool V2":
 
     file = st.file_uploader("Upload the Excel file (old layout)", type=["xlsx","xls"], key="order_merge_v2")
 
-    import re
-    import pandas as pd
-    from io import BytesIO
-    from datetime import datetime
-
     RE_PO = re.compile(r'(?:PO:|<strong>PO:</strong>)\s*#?\s*(\d+)', re.IGNORECASE)
     RE_WS = re.compile(r'\s+')
 
@@ -599,15 +608,15 @@ elif tool == "Order Merge Tool V2":
         missing = [c for c in REQUIRED_COLS if c not in df.columns]
         return missing
 
-if file:
-    try:
+    if file:
+        try:
         # 读取：自动兼容 .xlsx / .xls / HTML伪Excel / 误扩展CSV/TSV
-        raw_df, converted = read_excel_any(file, dtype=str, return_converted_bytes=True)
+            raw_df, converted = read_excel_any(file, dtype=str, return_converted_bytes=True)
 
         # 若自动发生了格式转换，给出提示与下载按钮
-        if converted:
-            st.info("🔁 检测到 HTML/CSV 伪装的 Excel，已自动转换为真实 .xlsx。")
-            st.download_button(
+            if converted:
+                st.info("🔁 检测到 HTML/CSV 伪装的 Excel，已自动转换为真实 .xlsx。")
+                st.download_button(
                 "📥 下载自动转换的 .xlsx",
                 converted,
                 file_name="converted.xlsx",
@@ -615,43 +624,43 @@ if file:
             )
 
         # 尝试解析 DateCreated（后续 consolidate 仍有兜底）
-        if "DateCreated" in raw_df.columns:
-            try:
-                raw_df["DateCreated"] = pd.to_datetime(raw_df["DateCreated"], errors="coerce")
-            except Exception:
-                pass
+            if "DateCreated" in raw_df.columns:
+                try:
+                    raw_df["DateCreated"] = pd.to_datetime(raw_df["DateCreated"], errors="coerce")
+                except Exception:
+                    pass
 
         # 列校验
-        missing = validate_columns(raw_df)
-        if missing:
-            st.error("❌ 缺少以下必要列，请在原表中补齐后再上传：\n\n- " + "\n- ".join(missing))
-        else:
-            with st.spinner("Processing…"):
-                merged = consolidate(raw_df)
+            missing = validate_columns(raw_df)
+            if missing:
+                st.error("❌ 缺少以下必要列，请在原表中补齐后再上传：\n\n- " + "\n- ".join(missing))
+            else:
+                with st.spinner("Processing…"):
+                    merged = consolidate(raw_df)
 
-            st.success(f"✅ 处理完成，共 {len(merged)} 条订单（每个 OrderNumber 一行）。")
-            st.dataframe(merged.head(50), use_container_width=True)  # 预览前 50 行
+                st.success(f"✅ 处理完成，共 {len(merged)} 条订单（每个 OrderNumber 一行）。")
+                st.dataframe(merged.head(50), use_container_width=True)  # 预览前 50 行
 
             # 下载结果
-            out = BytesIO()
-            with pd.ExcelWriter(out, engine="xlsxwriter",
-                                datetime_format="yyyy-mm-dd", date_format="yyyy-mm-dd") as writer:
-                merged.to_excel(writer, index=False, sheet_name="Consolidated")
-            out.seek(0)
+                out = BytesIO()
+                with pd.ExcelWriter(out, engine="xlsxwriter",
+                                    datetime_format="yyyy-mm-dd", date_format="yyyy-mm-dd") as writer:
+                    merged.to_excel(writer, index=False, sheet_name="Consolidated")
+                out.seek(0)
 
-            st.download_button(
+                st.download_button(
                 "📥 Download Merged Excel",
-                data=out,
-                file_name="order_merge_v2.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+                    data=out,
+                    file_name="order_merge_v2.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
-    except RuntimeError as e:
+        except RuntimeError as e:
         # 我们在 read_excel_any 里抛出的用户可读错误（如 HTML 无表格等）
-        st.error(f"❌ {e}")
-    except Exception as e:
+            st.error(f"❌ {e}")
+        except Exception as e:
         # 其他未预期错误
-        st.error(f"❌ Error: {e}")
+            st.error(f"❌ Error: {e}")
 
 
 
