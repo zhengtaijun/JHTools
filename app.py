@@ -14,6 +14,58 @@ import json
 import re
 from functools import lru_cache
 from rapidfuzz import process, fuzz
+from io import BytesIO
+
+# -------- Excel loader (supports .xlsx + .xls) --------
+def read_excel_any(file_obj, **kwargs) -> pd.DataFrame:
+    """
+    Robust reader for both .xlsx and .xls uploaded via Streamlit.
+    Tries pandas default, then falls back to engine-specific attempts.
+    kwargs are passed to pandas.read_excel (e.g., dtype=str).
+    """
+    name = getattr(file_obj, "name", "").lower()
+    # Read bytes once so we can retry with different engines
+    raw = file_obj.read() if hasattr(file_obj, "read") else file_obj
+    if isinstance(raw, bytes):
+        data = raw
+    else:
+        # If it's already bytes-like buffer
+        try:
+            raw.seek(0)
+            data = raw.read()
+        except Exception:
+            # as a last resort, let pandas try directly
+            return pd.read_excel(file_obj, **kwargs)
+
+    engines = []
+    if name.endswith(".xls"):
+        engines = [None, "xlrd"]  # xlrd required for .xls
+    else:
+        engines = [None, "openpyxl"]  # openpyxl for .xlsx
+
+    last_err = None
+    for eng in engines:
+        try:
+            bio = BytesIO(data)
+            if eng is None:
+                return pd.read_excel(bio, **kwargs)
+            else:
+                return pd.read_excel(bio, engine=eng, **kwargs)
+        except Exception as e:
+            last_err = e
+            continue
+
+    # final fallback: try both engines if not already tried
+    for eng in ["openpyxl", "xlrd"]:
+        try:
+            bio = BytesIO(data)
+            return pd.read_excel(bio, engine=eng, **kwargs)
+        except Exception as e:
+            last_err = e
+            continue
+
+    raise last_err if last_err else RuntimeError("Failed to read Excel file.")
+
 
 # ========== GLOBAL CONFIG ==========
 favicon = Image.open("favicon.png")
