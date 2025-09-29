@@ -309,6 +309,246 @@ elif tool == "Order Merge Tool":
             except Exception as e:
                 st.error(f"❌ Error: {e}")
     pass
+# ========== TOOL 3: Order Merge Tool V2 ==========
+elif tool == "Order Merge Tool V2":
+    st.subheader("📋 Order Merge Tool V2")
+    st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/instructions.md)")
+
+    st.info(
+        "📢 公告：本工具将旧表（按产品分行）整理为每个 **OrderNumber** 只保留一行的新表。\n\n"
+        "- 产品名自动去重合并（Product_Description + Size + Colour）\n"
+        "- 第14列输出 PO（形如 PO3513），忽略 “2 Available”\n"
+        "- 第15列输出 Items（形如 `qty*合并后产品名`，多件逗号分隔）\n"
+        "- 其他列位置、标记规则严格按规范生成\n"
+    )
+
+    file = st.file_uploader("Upload the Excel file (old layout)", type=["xlsx"], key="order_merge_v2")
+
+    import re
+    import pandas as pd
+    from io import BytesIO
+    from datetime import datetime
+
+    RE_PO = re.compile(r'(?:PO:|<strong>PO:</strong>)\s*#?\s*(\d+)', re.IGNORECASE)
+    RE_WS = re.compile(r'\s+')
+
+    REQUIRED_COLS = [
+        "DateCreated","OrderNumber","OrderStatus","Product_Description","Size","Colour",
+        "CustomerName","Phone","Mobile","DeliveryMode","PublicComments","qtyRequired","SourceFrom"
+    ]
+
+    def clean_str(s):
+        if pd.isna(s):
+            return ""
+        s = str(s)
+        s = re.sub(r"<[^>]*>", "", s)            # 去 HTML 标签
+        s = RE_WS.sub(" ", s).strip()
+        return s
+
+    def contains_ci(hay, needle):
+        return bool(needle) and needle.lower() in hay.lower()
+
+    def merge_product_name(prod, size, colour):
+        p = clean_str(prod)
+        s = clean_str(size)
+        c = clean_str(colour)
+
+        parts = [p] if p else []
+        if s and not contains_ci(p, s):
+            parts.append(s)
+        merged = " - ".join(parts) if parts else ""
+        if c and not contains_ci(merged, c):
+            merged = (merged + (" - " if merged else "") + c)
+        return merged
+
+    def fmt_qty_name(qty, name):
+        if not name:
+            return ""
+        if pd.isna(qty) or str(qty).strip() == "":
+            return name
+        try:
+            q = float(qty)
+            q_int = int(q)
+            q_str = str(q_int) if abs(q - q_int) < 1e-9 else str(q)
+        except Exception:
+            q_str = str(qty).strip()
+        return f"{q_str}*{name}"
+
+    def extract_pos(value):
+        """提取 POxxxx；对 '2 Available' 类不处理。"""
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return []
+        text = str(value)
+        if re.search(r"\b\d+\s+Available\b", text, flags=re.IGNORECASE):
+            return []
+        matches = RE_PO.findall(text)
+        return [f"PO{m}" for m in matches]
+
+    def first_nonempty(values):
+        for v in values:
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+            if pd.notna(v) and str(v).strip():
+                return str(v).strip()
+        return ""
+
+    def consolidate(df: pd.DataFrame) -> pd.DataFrame:
+        # 确保缺失列存在
+        for col in REQUIRED_COLS:
+            if col not in df.columns:
+                df[col] = pd.NA
+
+        # 预处理
+        df["_MergedName"] = df.apply(
+            lambda r: merge_product_name(r["Product_Description"], r["Size"], r["Colour"]), axis=1
+        )
+        df["_ItemLine"] = [fmt_qty_name(q, n) for q, n in zip(df["qtyRequired"], df["_MergedName"])]
+        df["_POs"] = df["SourceFrom"].apply(extract_pos)
+
+        def merge_phones(phone, mobile):
+            parts = []
+            for v in [phone, mobile]:
+                v = clean_str(v)
+                if v:
+                    parts.append(v)
+            # 去重保序
+            seen, unique = set(), []
+            for x in parts:
+                if x not in seen:
+                    seen.add(x)
+                    unique.append(x)
+            return ", ".join(unique)
+
+        df["_Phones"] = [merge_phones(p, m) for p, m in zip(df["Phone"], df["Mobile"])]
+
+        rows = []
+        for order, g in df.groupby("OrderNumber", dropna=False):
+            g = g.copy()
+
+            # 第4列：HomeDelivery，任一行为 'home' 则置 1（优先按 home）
+            delivery_vals = [str(x).strip().lower() for x in g["DeliveryMode"].tolist() if str(x).strip()]
+            home_flag = 1 if any(x == "home" for x in delivery_vals) else ""
+
+            # 第12列：AwaitingPayment 标记
+            status_vals = [str(x).strip() for x in g["OrderStatus"].tolist() if str(x).strip()]
+            awaiting_flag = 1 if any(x.lower() == "awaiting payment" for x in status_vals) else ""
+
+            # 第15列：Items
+            items = [x for x in g["_ItemLine"].tolist() if x]
+            items_text = ", ".join(items)
+
+            # 第14列：POs（扁平+去重）
+            po_list, seen_po = [], set()
+            for sub in g["_POs"].tolist():
+                for x in sub:
+                    if x not in seen_po:
+                        seen_po.add(x)
+                        po_list.append(x)
+            po_text = ", ".join(po_list)
+
+            # 第7列：ContactPhones（去重）
+            phone_opts = [x for x in g["_Phones"].tolist() if x]
+            seen_ph, phone_unique = set(), []
+            for x in phone_opts:
+                if x not in seen_ph:
+                    seen_ph.add(x)
+                    phone_unique.append(x)
+            phones_text = ", ".join(phone_unique)
+
+            # 第13列：PublicComments（去重，用 " | " 连接）
+            comments_vals = [clean_str(x) for x in g["PublicComments"].tolist() if clean_str(x)]
+            seen_c, comments_unique = set(), []
+            for x in comments_vals:
+                if x not in seen_c:
+                    seen_c.add(x)
+                    comments_unique.append(x)
+            comments_text = " | ".join(comments_unique)
+
+            # 第2列：DateCreated（尽量取最早）
+            date_series = g["DateCreated"]
+            parsed = pd.to_datetime(date_series, errors="coerce")
+            if parsed.notna().any():
+                # 若能解析，取最早日期（仅日期部分）
+                date_value = str(parsed.min().date())
+            else:
+                date_value = first_nonempty(date_series.tolist())
+
+            # 第6列：CustomerName（首个非空）
+            customer = first_nonempty(g["CustomerName"].tolist())
+
+            row = {
+                "OrderNumber": order,        # 1
+                "DateCreated": date_value,   # 2
+                "Col3": "",                  # 3 (空)
+                "HomeDelivery": home_flag,   # 4
+                "Col5": "",                  # 5 (空)
+                "CustomerName": customer,    # 6
+                "ContactPhones": phones_text,# 7
+                "Col8": "", "Col9": "", "Col10": "", "Col11": "",  # 8~11 空
+                "AwaitingPayment": awaiting_flag,  # 12
+                "PublicComments": comments_text,   # 13
+                "POs": po_text,                    # 14
+                "Items": items_text,               # 15
+            }
+            rows.append(row)
+
+        out = pd.DataFrame(rows)
+        # 确保所有列都存在
+        for h in [
+            "OrderNumber","DateCreated","Col3","HomeDelivery","Col5","CustomerName","ContactPhones",
+            "Col8","Col9","Col10","Col11","AwaitingPayment","PublicComments","POs","Items"
+        ]:
+            if h not in out.columns:
+                out[h] = ""
+
+        # 按 1~15 列位重排
+        out = out[
+            ["OrderNumber","DateCreated","Col3","HomeDelivery","Col5",
+             "CustomerName","ContactPhones","Col8","Col9","Col10","Col11",
+             "AwaitingPayment","PublicComments","POs","Items"]
+        ]
+        return out
+
+    def validate_columns(df: pd.DataFrame):
+        missing = [c for c in REQUIRED_COLS if c not in df.columns]
+        return missing
+
+    if file:
+        try:
+            raw_df = pd.read_excel(file, dtype=str)
+            # 尝试给 DateCreated 单独解析，后续 consolidate 会再次兜底
+            if "DateCreated" in raw_df.columns:
+                try:
+                    raw_df["DateCreated"] = pd.to_datetime(raw_df["DateCreated"], errors="coerce")
+                except Exception:
+                    pass
+
+            missing = validate_columns(raw_df)
+            if missing:
+                st.error("❌ 缺少以下必要列，请在原表中补齐后再上传：\n\n- " + "\n- ".join(missing))
+            else:
+                with st.spinner("Processing…"):
+                    merged = consolidate(raw_df)
+
+                st.success(f"✅ 处理完成，共 {len(merged)} 条订单（每个 OrderNumber 一行）。")
+                st.dataframe(merged.head(50))  # 预览前 50 行
+
+                # 下载结果
+                out = BytesIO()
+                with pd.ExcelWriter(out, engine="xlsxwriter", datetime_format="yyyy-mm-dd", date_format="yyyy-mm-dd") as writer:
+                    merged.to_excel(writer, index=False, sheet_name="Consolidated")
+                out.seek(0)
+
+                st.download_button(
+                    "📥 Download Merged Excel",
+                    data=out,
+                    file_name="order_merge_v2.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+        except Exception as e:
+            st.error(f"❌ Error: {e}")
+    pass
 # ========== TOOL 3: Profit Calculator ==========
 elif tool == "Profit Calculator":
     st.subheader("💰 Profit Calculator")
