@@ -19,6 +19,7 @@ from rapidfuzz import process, fuzz
 
 # -------- Robust Excel/HTML/CSV loader --------
 # -------- Robust Excel/HTML/CSV loader with auto-convert-to-xlsx --------
+
 def _ensure_xlrd_ok():
     try:
         import xlrd
@@ -36,58 +37,52 @@ def _to_xlsx_bytes(df: pd.DataFrame) -> BytesIO:
     return bio
 
 def read_excel_any(file_obj, return_converted_bytes: bool = False, **kwargs):
-    """
-    统一读取 .xlsx/.xls，同时自动处理：
-      - HTML 伪装的 .xls/.xlsx → 解析第一张表，并可返回一份已转为 xlsx 的二进制
-      - CSV/TSV 误扩展 → 解析为 DataFrame，并可返回一份 xlsx
-    参数：
-      - return_converted_bytes: 若发生“伪 Excel→真 xlsx”转换，返回 (df, xlsx_bytes)；否则 (df, None)
-    其他 kwargs 仅在真正的 Excel 读取中传给 pandas.read_excel。
-    """
     name = (getattr(file_obj, "name", "") or "").lower()
 
-    # 读取原始字节，便于多次尝试和嗅探
     raw = file_obj.read() if hasattr(file_obj, "read") else file_obj
     if not isinstance(raw, (bytes, bytearray)):
         try:
             file_obj.seek(0)
             raw = file_obj.read()
         except Exception:
-            # 兜底交给 pandas
             df = pd.read_excel(file_obj, **kwargs)
             return (df, None) if return_converted_bytes else df
 
     data = bytes(raw)
     head = data[:64]
+    sniff = data[:2048].lower()  # 多 sniff 一点，便于发现 <table> 在前
 
     def as_bio():
         return BytesIO(data)
 
-    # 1) # HTML 伪装的“Excel”
-    if head.lstrip().lower().startswith((b"<html", b"<!doctype html")):
-        # 用 read_html 抓取表格，强制不要把第一行当 header
+    # ---------- 1) HTML 伪装的 Excel：<html / <!doctype / <table 都算 ----------
+    if (sniff.lstrip().startswith(b"<html")
+        or sniff.lstrip().startswith(b"<!doctype html")
+        or b"<table" in sniff):          # 关键：补上这条
+        # 用 read_html 解析，不把第一行当表头
         tables = pd.read_html(as_bio(), header=None)
         if not tables:
             raise RuntimeError("HTML 文件中未发现可解析的表格。请导出为真正的 Excel。")
-
         df = tables[0]
 
-        # 如果第一列是 0,1,2 这种数字，第二行才是真正表头
-        # 可以检测：df.iloc[0] 中是否包含关键字段
+        # 如果第一行包含你的标准字段，把第一行提为列名
         expected_cols = {
-            "DateCreated","OrderNumber","OrderStatus","Product_Description","Size",
-            "Colour","CustomerName","Phone","Mobile","DeliveryMode",
-            "PublicComments","qtyRequired","SourceFrom"
+            "datecreated","ordernumber","orderstatus","product_description","size",
+            "colour","customername","phone","mobile","deliverymode",
+            "publiccomments","qtyrequired","sourcefrom"
         }
-        if any(x in expected_cols for x in df.iloc[0].astype(str).tolist()):
-            # 把第一行设为列名
+        first_row = [str(x).strip() for x in df.iloc[0].tolist()]
+        if any(x.lower() in expected_cols for x in first_row):
             df.columns = df.iloc[0]
             df = df.drop(df.index[0]).reset_index(drop=True)
+
+        # 统一成字符串（和 dtype=str 效果一致）
+        df = df.applymap(lambda x: "" if pd.isna(x) else str(x))
 
         conv = _to_xlsx_bytes(df) if return_converted_bytes else None
         return (df, conv) if return_converted_bytes else df
 
-    # 2) 真 .xlsx（ZIP 文件头）
+    # ---------- 2) 真 .xlsx（ZIP 头） ----------
     if head.startswith(b"PK\x03\x04"):
         try:
             df = pd.read_excel(as_bio(), engine="openpyxl", **kwargs)
@@ -95,24 +90,24 @@ def read_excel_any(file_obj, return_converted_bytes: bool = False, **kwargs):
             df = pd.read_excel(as_bio(), **kwargs)
         return (df, None) if return_converted_bytes else df
 
-    # 3) 真 .xls（OLE2 文件头）或扩展名提示 .xls
+    # ---------- 3) 真 .xls（OLE2 头）或扩展名 .xls ----------
     if head.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1") or name.endswith(".xls"):
         _ensure_xlrd_ok()
         df = pd.read_excel(as_bio(), engine="xlrd", **kwargs)
         return (df, None) if return_converted_bytes else df
 
-    # 4) 文本 CSV/TSV 误扩展
+    # ---------- 4) CSV/TSV 误扩展 ----------
     text_sample = data[:4096].decode("utf-8", errors="ignore")
     if ("\t" in text_sample or "," in text_sample) and ("\n" in text_sample or "\r" in text_sample):
         sep = "\t" if text_sample.count("\t") >= text_sample.count(",") else ","
         df = pd.read_csv(BytesIO(data), sep=sep)
+        df = df.applymap(lambda x: "" if pd.isna(x) else str(x))
         conv = _to_xlsx_bytes(df) if return_converted_bytes else None
         return (df, conv) if return_converted_bytes else df
 
-    # 5) 兜底交给 pandas 猜（大概率是奇怪的变种，但也许能读）
+    # ---------- 5) 兜底 ----------
     df = pd.read_excel(as_bio(), **kwargs)
     return (df, None) if return_converted_bytes else df
-
 
 
 # ========== GLOBAL CONFIG ==========
