@@ -407,7 +407,7 @@ elif tool == "Order Merge Tool":
 # ========== TOOL 3: Order Merge Tool V2 ==========
 elif tool == "Order Merge Tool V2":
     st.subheader("📋 Order Merge Tool V2")
-    st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/instruction%20v2.png)")
+    st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/instructions.md)")
 
     st.info(
         "📢 公告：本工具将旧表（按产品分行）整理为每个 **OrderNumber** 只保留一行的新表。\n\n"
@@ -517,7 +517,10 @@ elif tool == "Order Merge Tool V2":
 
             # 第4列：HomeDelivery，任一行为 'home' 则置 1（优先按 home）
             delivery_vals = [str(x).strip().lower() for x in g["DeliveryMode"].tolist() if str(x).strip()]
-            home_flag = 1 if any(x == "home" for x in delivery_vals) else ""
+            if any(x == "home" for x in delivery_vals):
+                home_flag = 1
+            else:
+                home_flag = "pickup" if delivery_vals else ""
 
             # 第12列：AwaitingPayment 标记
             status_vals = [str(x).strip() for x in g["OrderStatus"].tolist() if str(x).strip()]
