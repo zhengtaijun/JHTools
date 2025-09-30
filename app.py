@@ -516,11 +516,11 @@ elif tool == "Order Merge Tool V2":
             g = g.copy()
 
             # 第4列：HomeDelivery，任一行为 'home' 则置 1（优先按 home）
-            delivery_vals = [str(x).strip().lower() for x in g["DeliveryMode"].tolist() if str(x).strip()]
+            delivery_vals = [str(x).strip().lower() for x in g["DeliveryMode"].tolist()]
             if any(x == "home" for x in delivery_vals):
                 home_flag = 1
             else:
-                home_flag = "pickup" if delivery_vals else ""
+                home_flag = "pickup"
 
             # 第12列：AwaitingPayment 标记
             status_vals = [str(x).strip() for x in g["OrderStatus"].tolist() if str(x).strip()]
