@@ -407,7 +407,7 @@ elif tool == "Order Merge Tool":
 # ========== TOOL 3: Order Merge Tool V2 ==========
 elif tool == "Order Merge Tool V2":
     st.subheader("📋 Order Merge Tool V2")
-    st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/instructions.md)")
+    st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/instruction%20v2.png)")
 
     st.info(
         "📢 公告：本工具将旧表（按产品分行）整理为每个 **OrderNumber** 只保留一行的新表。\n\n"
