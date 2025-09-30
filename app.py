@@ -496,17 +496,28 @@ elif tool == "Order Merge Tool V2":
         df["_POs"] = df["SourceFrom"].apply(extract_pos)
 
         def merge_phones(phone, mobile):
+            def normalize_phone(v):
+                """转为字符串并去掉结尾的 .0"""
+                if pd.isna(v):
+                    return ""
+                s = str(v).strip()
+                if s.endswith(".0"):
+                    s = s[:-2]
+                return s
+
             parts = []
             for v in [phone, mobile]:
-                v = clean_str(v)
+                v = normalize_phone(v)
                 if v:
                     parts.append(v)
+
             # 去重保序
             seen, unique = set(), []
             for x in parts:
                 if x not in seen:
                     seen.add(x)
                     unique.append(x)
+
             return ", ".join(unique)
 
         df["_Phones"] = [merge_phones(p, m) for p, m in zip(df["Phone"], df["Mobile"])]
