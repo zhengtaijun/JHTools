@@ -792,7 +792,7 @@ elif tool == "Profit Calculator":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     pass
-# ========== TOOL 4: List Split ==========
+
 # ========== TOOL 4: List Split ==========
 elif tool == "List Split":
     st.subheader("📄 List Split")
@@ -803,34 +803,59 @@ elif tool == "List Split":
     if st.button("🔍 Analyze pasted content") and pasted_text:
         try:
             from io import StringIO
-            df_input = pd.read_csv(StringIO(pasted_text), sep="\t", header=None)
+            # 读取粘贴的制表符分隔文本；全部按字符串处理，避免数值被转成 1.0 之类
+            df_input = pd.read_csv(StringIO(pasted_text), sep="\t", header=None, dtype=str)
 
             st.write("✅ Preview of parsed input:")
-            st.dataframe(df_input)
+            st.dataframe(df_input, use_container_width=True)
+
+            # 统一清洗：把 None/NaN/'nan' 等转为空串，且去首尾空格
+            def _fmt_cell(v):
+                if v is None:
+                    return ""
+                s = str(v).strip()
+                return "" if s.lower() in ("nan", "none") else s
 
             records = []
+
             for _, row in df_input.iterrows():
-                order_id = str(row.iloc[0])
-                product_str = str(row.iloc[-1])
+                # 订单号：第一列（若只有1列也能取到）
+                order_id = _fmt_cell(row.iloc[0]) if len(row) >= 1 else ""
+
+                # 供应商订货号：倒数第二列（需要至少2列才有）
+                supplier_code = _fmt_cell(row.iloc[-2]) if len(row) >= 2 else ""
+
+                # 合并成 “供应商订货号//订单号”，若供应商订货号缺失则仅用订单号
+                combined_order_ref = f"{supplier_code}//{order_id}" if supplier_code else order_id
+
+                # 产品清单：最后一列，形如 "2*Chair,1*Table"
+                product_str = _fmt_cell(row.iloc[-1]) if len(row) >= 1 else ""
                 items = [item.strip() for item in product_str.split(',') if '*' in item]
 
                 for item in items:
                     try:
                         qty_str, name = item.split('*', 1)
-                        qty = int(qty_str.strip())
-                        name = name.strip()
+                        qty_str = _fmt_cell(qty_str)
+                        name = _fmt_cell(name)
+                        if not name:
+                            continue
+                        # 兼容 "2" / "2.0" / " 2 " 等
+                        qty = int(float(qty_str)) if qty_str else 0
                         records.append({
+                            'order': combined_order_ref,  # ← 合并后的 “供应商订货号//订单号”
                             'name': name,
-                            'order': order_id,
                             'qty': qty
                         })
-                    except ValueError:
+                    except Exception:
                         st.warning(f"⚠️ Skipped malformed item: {item}")
 
             if records:
-                df_result = pd.DataFrame(records)
+                # 固定列顺序
+                df_result = pd.DataFrame(records)[['order', 'name', 'qty']]
+
+                st.info("🧩 已将倒数第二列识别为『供应商订货号』，并与第一列『订单号』合并为：**供应商订货号//订单号**")
                 st.success("✅ Processing completed.")
-                st.dataframe(df_result)
+                st.dataframe(df_result, use_container_width=True)
 
                 to_download = BytesIO()
                 df_result.to_excel(to_download, index=False)
@@ -842,6 +867,7 @@ elif tool == "List Split":
         except Exception as e:
             st.error(f"❌ Error processing input: {e}")
             pass
+
 # ========== TOOL 5: Image Table Extractor ==========
 elif tool == "Image Table Extractor":
     st.subheader("🖼️ Excel Screenshot to Table")
