@@ -576,16 +576,19 @@ elif tool == "Order Merge Tool V2":
             # 第2列：DateCreated（尽量取最早）→ 统一格式化 yyyy-mm-dd
             date_series = g["DateCreated"]
             parsed = pd.to_datetime(date_series, errors="coerce", dayfirst=True)
-            if parsed.notna().any():
-                # 若能解析，取最早日期（仅日期部分）
-                date_value = parsed.min().strftime("%Y-%m-%d")
-            else:
-                # 兜底：如果无法解析，则保留首个非空字符串，并尝试再格式化一次
-                raw = first_nonempty(date_series.tolist())
+            # 若列中包含字符串，用指定格式强制解析
+            def parse_dates_safe(series):
+                # 优先直接解析 datetime 类型
+                if pd.api.types.is_datetime64_any_dtype(series):
+                    return series.dt.date
+                # 否则尝试按固定格式 dd/mm/yyyy hh:mm:ss AM/PM
                 try:
-                    date_value = pd.to_datetime(raw, errors="coerce", dayfirst=True).strftime("%Y-%m-%d")
+                    return pd.to_datetime(series, format="%d/%m/%Y %I:%M:%S %p", errors="coerce", dayfirst=True).dt.date
                 except Exception:
-                    date_value = raw  # 实在不行就原样输出
+                    return pd.to_datetime(series, errors="coerce", dayfirst=True).dt.date
+
+            parsed = parse_dates_safe(date_series)
+
 
             # 第6列：CustomerName（首个非空）
             customer = first_nonempty(g["CustomerName"].tolist())
@@ -640,7 +643,7 @@ elif tool == "Order Merge Tool V2":
     if file:
         try:
             # 读取：自动兼容 .xlsx / .xls / HTML伪Excel / 误扩展CSV/TSV
-            raw_df, converted = read_excel_any(file, dtype=str, return_converted_bytes=True)
+            raw_df, converted = read_excel_any(file, return_converted_bytes=True)
 
             # 若自动发生了格式转换，给出提示与下载按钮
             if converted:
