@@ -419,6 +419,9 @@ elif tool == "Order Merge Tool V2":
         "- **第二列 DateCreated 统一显示为 yyyy-mm-dd**\n"
         "- 预览支持**一键复制表格（不含表头）**\n"
     )
+    import streamlit.components.v1 as components
+    BUILD_ID = "OMTV2-2025-10-14-01"
+
 
 
 
