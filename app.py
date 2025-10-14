@@ -406,7 +406,7 @@ elif tool == "Order Merge Tool":
     pass
 # ========== TOOL 3: Order Merge Tool V2 ==========
 # ========== TOOL 3: Order Merge Tool V2 ==========
-
+# ========== TOOL 3: Order Merge Tool V2 ==========
 elif tool == "Order Merge Tool V2":
     st.subheader("📋 Order Merge Tool V2")
     st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/instruction%20v2.png)")
@@ -416,14 +416,14 @@ elif tool == "Order Merge Tool V2":
         "- 产品名自动去重合并（Product_Description + Size + Colour）\n"
         "- 第14列输出 PO（形如 PO3513），忽略 “2 Available”\n"
         "- 第15列输出 Items（形如 `qty*合并后产品名`，多件逗号分隔）\n"
-        "- **第二列 DateCreated 统一显示为 yyyy-mm-dd**\n"
+        "- **第二列 DateCreated 严格按 dd/mm/yyyy + 时间解析，并统一输出为 yyyy-mm-dd**\n"
         "- 预览支持**一键复制表格（不含表头）**\n"
     )
+
     import streamlit.components.v1 as components
-    BUILD_ID = "OMTV2-2025-10-14-01"
+    from datetime import datetime
 
-
-
+    BUILD_ID = "OMTV2-2025-10-14-02"
 
     file = st.file_uploader("Upload the Excel file (old layout)", type=["xlsx","xls"], key="order_merge_v2")
 
@@ -435,6 +435,7 @@ elif tool == "Order Merge Tool V2":
         "CustomerName","Phone","Mobile","DeliveryMode","PublicComments","qtyRequired","SourceFrom"
     ]
 
+    # -------- helpers --------
     def clean_str(s):
         if pd.isna(s):
             return ""
@@ -447,10 +448,7 @@ elif tool == "Order Merge Tool V2":
         return bool(needle) and needle.lower() in hay.lower()
 
     def merge_product_name(prod, size, colour):
-        p = clean_str(prod)
-        s = clean_str(size)
-        c = clean_str(colour)
-
+        p = clean_str(prod); s = clean_str(size); c = clean_str(colour)
         parts = [p] if p else []
         if s and not contains_ci(p, s):
             parts.append(s)
@@ -465,8 +463,7 @@ elif tool == "Order Merge Tool V2":
         if pd.isna(qty) or str(qty).strip() == "":
             return name
         try:
-            q = float(qty)
-            q_int = int(q)
+            q = float(qty); q_int = int(q)
             q_str = str(q_int) if abs(q - q_int) < 1e-9 else str(q)
         except Exception:
             q_str = str(qty).strip()
@@ -490,6 +487,41 @@ elif tool == "Order Merge Tool V2":
                 return str(v).strip()
         return ""
 
+    # —— 日期：严格 dd/mm/yyyy 解析，兼容含时间（AM/PM/24h） ——
+    def _parse_au_datetime(x):
+        """按 dd/mm/yyyy 文化解析；返回 date 或 None。"""
+        if pd.isna(x):
+            return None
+        if isinstance(x, (pd.Timestamp, datetime)):
+            return x.date()
+        s = str(x).strip()
+        if not s:
+            return None
+        fmts = [
+            "%d/%m/%Y %I:%M:%S %p",
+            "%d/%m/%Y %I:%M %p",
+            "%d/%m/%Y %H:%M:%S",
+            "%d/%m/%Y %H:%M",
+            "%d/%m/%Y",
+        ]
+        for fmt in fmts:
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                pass
+        # 兜底仍按 dayfirst=True 尝试
+        try:
+            return pd.to_datetime(s, errors="raise", dayfirst=True).date()
+        except Exception:
+            return None
+
+    def _to_ymd(x: object) -> str:
+        d = _parse_au_datetime(x)
+        if d:
+            return d.strftime("%Y-%m-%d")
+        return (str(x).strip() if (x is not None and str(x).strip()) else "")
+
+    # -------- consolidate --------
     def consolidate(df: pd.DataFrame) -> pd.DataFrame:
         # 确保缺失列存在
         for col in REQUIRED_COLS:
@@ -505,27 +537,23 @@ elif tool == "Order Merge Tool V2":
 
         def merge_phones(phone, mobile):
             def normalize_phone(v):
-                """转为字符串并去掉结尾的 .0"""
                 if pd.isna(v):
                     return ""
                 s = str(v).strip()
                 if s.endswith(".0"):
                     s = s[:-2]
                 return s
-
             parts = []
             for v in [phone, mobile]:
                 v = normalize_phone(v)
                 if v:
                     parts.append(v)
-
             # 去重保序
             seen, unique = set(), []
             for x in parts:
                 if x not in seen:
                     seen.add(x)
                     unique.append(x)
-
             return ", ".join(unique)
 
         df["_Phones"] = [merge_phones(p, m) for p, m in zip(df["Phone"], df["Mobile"])]
@@ -573,50 +601,22 @@ elif tool == "Order Merge Tool V2":
                     comments_unique.append(x)
             comments_text = " | ".join(comments_unique)
 
-            # 第2列：DateCreated（尽量取最早）→ 统一格式化 yyyy-mm-dd
-            def parse_dates_safe(series: pd.Series) -> pd.Series:
-                """优先保留 Excel 的 datetime；若是字符串则按 dd/mm/yyyy hh:mm:ss AM/PM 解析，解析不到再按 dd/mm/yyyy 兜底。"""
-                # 已经是 datetime 的情况
-                if pd.api.types.is_datetime64_any_dtype(series):
-                    return pd.to_datetime(series, errors="coerce")
-
-                s = series.astype(str).str.strip()
-
-                # 先按带时间的格式（AM/PM）
-                parsed = pd.to_datetime(
-                    s, format="%d/%m/%Y %I:%M:%S %p", errors="coerce", dayfirst=True
-                )
-
-                # 还没解析到的，再按只有日期的格式
-                mask = parsed.isna()
-                if mask.any():
-                    parsed.loc[mask] = pd.to_datetime(
-                        s[mask], format="%d/%m/%Y", errors="coerce", dayfirst=True
-                    )
-                return parsed
-
+            # 第2列：DateCreated（每个订单取最早的一天）→ 统一为 yyyy-mm-dd
             date_series = g["DateCreated"]
-            parsed = parse_dates_safe(date_series)
-
-            if parsed.notna().any():
-                # 取最早的日期
-                date_value = parsed.min().strftime("%Y-%m-%d")
+            dates = [_parse_au_datetime(v) for v in date_series.tolist()]
+            dates = [d for d in dates if d is not None]
+            if dates:
+                date_value = min(dates).strftime("%Y-%m-%d")
             else:
-                # 兜底：取首个非空原始值再尝试解析
                 raw = first_nonempty(date_series.tolist())
-                try:
-                    date_value = pd.to_datetime(raw, dayfirst=True, errors="coerce").strftime("%Y-%m-%d")
-                except Exception:
-                    date_value = str(raw).strip() if raw else ""
-
-
+                date_value = _to_ymd(raw)
 
             # 第6列：CustomerName（首个非空）
             customer = first_nonempty(g["CustomerName"].tolist())
 
             row = {
                 "OrderNumber": order,        # 1
-                "DateCreated": date_value,   # 2 (强制 yyyy-mm-dd)
+                "DateCreated": date_value,   # 2
                 "Col3": "",                  # 3 (空)
                 "HomeDelivery": home_flag,   # 4
                 "Col5": "",                  # 5 (空)
@@ -631,6 +631,7 @@ elif tool == "Order Merge Tool V2":
             rows.append(row)
 
         out = pd.DataFrame(rows)
+
         # 确保所有列都存在
         for h in [
             "OrderNumber","DateCreated","Col3","HomeDelivery","Col5","CustomerName","ContactPhones",
@@ -639,15 +640,8 @@ elif tool == "Order Merge Tool V2":
             if h not in out.columns:
                 out[h] = ""
 
-        # 再次保证 DateCreated 文本为 yyyy-mm-dd（防止上游有非标准字符串混入）
-        def _force_ymd(x):
-            if pd.isna(x) or str(x).strip() == "":
-                return ""
-            try:
-                return pd.to_datetime(x, errors="coerce", dayfirst=True).strftime("%Y-%m-%d")
-            except Exception:
-                return str(x).strip()
-        out["DateCreated"] = out["DateCreated"].apply(_force_ymd)
+        # 统一保证为 yyyy-mm-dd 文本
+        out["DateCreated"] = out["DateCreated"].apply(_to_ymd)
 
         # 按 1~15 列位重排
         out = out[
@@ -663,10 +657,9 @@ elif tool == "Order Merge Tool V2":
 
     if file:
         try:
-            # 读取：自动兼容 .xlsx / .xls / HTML伪Excel / 误扩展CSV/TSV
+            # 自动兼容 .xlsx / .xls / HTML伪Excel / 误扩展CSV/TSV
             raw_df, converted = read_excel_any(file, return_converted_bytes=True)
 
-            # 若自动发生了格式转换，给出提示与下载按钮
             if converted:
                 st.info("🔁 检测到 HTML/CSV 伪装的 Excel，已自动转换为真实 .xlsx。")
                 st.download_button(
@@ -676,7 +669,6 @@ elif tool == "Order Merge Tool V2":
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-            # 列校验
             missing = validate_columns(raw_df)
             if missing:
                 st.error("❌ 缺少以下必要列，请在原表中补齐后再上传：\n\n- " + "\n- ".join(missing))
@@ -684,11 +676,10 @@ elif tool == "Order Merge Tool V2":
                 with st.spinner("Processing…"):
                     merged = consolidate(raw_df)
 
-                # 预览：显示前 50 行
-                st.success(f"✅ 处理完成，共 {len(merged)} 条订单（每个 OrderNumber 一行）。")
+                st.success(f"✅ 处理完成，共 {len(merged)} 条订单（每个 OrderNumber 一行）。  • Build {BUILD_ID}")
                 st.dataframe(merged.head(50), use_container_width=True)
 
-                # —— 一键复制（不含表头，复制的是整张结果表） ——
+                # 一键复制（不含表头）
                 tsv_no_header = merged.to_csv(sep="\t", header=False, index=False)
                 components.html(f"""
                     <textarea id="mergedTSV" style="position:absolute;left:-10000px;top:-10000px">{tsv_no_header}</textarea>
@@ -702,12 +693,11 @@ elif tool == "Order Merge Tool V2":
                     </button>
                 """, height=40)
 
-                # 下载结果（Excel）：DateCreated 已是 yyyy-mm-dd 文本格式
+                # 下载结果（Excel）
                 out = BytesIO()
                 with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
                     merged.to_excel(writer, index=False, sheet_name="Consolidated")
                 out.seek(0)
-
                 st.download_button(
                     "📥 Download Merged Excel",
                     data=out,
@@ -721,6 +711,8 @@ elif tool == "Order Merge Tool V2":
             st.error(f"❌ Error: {e}")
 
     pass
+
+
 # ========== TOOL 3: Profit Calculator ==========
 elif tool == "Profit Calculator":
     st.subheader("💰 Profit Calculator")
