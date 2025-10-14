@@ -693,7 +693,7 @@ elif tool == "Order Merge Tool V2":
         except Exception as e:
             st.error(f"❌ Error: {e}")
 
-        pass
+    pass
 # ========== TOOL 3: Profit Calculator ==========
 elif tool == "Profit Calculator":
     st.subheader("💰 Profit Calculator")
