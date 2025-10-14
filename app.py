@@ -433,6 +433,7 @@ elif tool == "Order Merge Tool V2":
     ]
 
     # ----------------- 暴力日期解析：只看第一个 a/b/c，然后重排为 yyyy/mm/dd -----------------
+# 1) 暴力日期解析（保持不变）
     RE_DMY = re.compile(r'(\d{1,4})\s*/\s*(\d{1,2})\s*/\s*(\d{2,4})')
 
     def brutal_extract_ymd(value):
@@ -440,32 +441,38 @@ elif tool == "Order Merge Tool V2":
         m = RE_DMY.search(s)
         if not m:
             return None
-        a, b, c = m.groups()   # a=day, b=month, c=year
+        a, b, c = m.groups()   # a=day, b=month, c=year（原始是 dd/mm/yyyy）
         day = int(a)
         month = int(b)
         year = int(c) if len(c) == 4 else int("20" + c)
-        return (year, month, day)
+        return (year, month, day)   # 返回 (yyyy, mm, dd)
+
+    # 2) 只在“不是 yyyy/mm/dd”时才重排
+    RE_YMD_FINAL = re.compile(r'^\s*\d{4}/\d{1,2}/\d{1,2}\s*$')
 
     def brutal_format_ymd(value):
-        t = brutal_extract_ymd(value)
+        s = str(value).strip()
+        # 已经是 yyyy/mm/dd → 直接返回，避免二次重排
+        if RE_YMD_FINAL.match(s):
+            return s
+        t = brutal_extract_ymd(s)
         if not t:
-            return str(value).strip() if value is not None else ""
+            return s if value is not None else ""
         y, m, d = t
-        # 按你的要求不补零：2025/10/5
-        return f"{y}/{m}/{d}"
+        return f"{y}/{m}/{d}"   # 不补零：2025/10/5
 
     def brutal_min_date(series):
         tuples = [brutal_extract_ymd(v) for v in series]
         tuples = [t for t in tuples if t is not None]
         if not tuples:
-            # 取第一个非空原始值再试一次
+            # 没抓到任何 a/b/c，就回退输出首个非空原文（或空）
             for v in series:
-                s = str(v).strip()
-                if s:
-                    return brutal_format_ymd(s)
+                if str(v).strip():
+                    return brutal_format_ymd(v)
             return ""
-        y, m, d = min(tuples)  # 直接按 (y,m,d) 比较
+        y, m, d = min(tuples)           # 按 (yyyy, mm, dd) 取最早
         return f"{y}/{m}/{d}"
+
 
     # ----------------- 其它工具函数 -----------------
     def clean_str(s):
@@ -633,7 +640,7 @@ elif tool == "Order Merge Tool V2":
                 out[h] = ""
 
         # 保险：再统一用暴力格式器
-        out["DateCreated"] = out["DateCreated"].apply(brutal_format_ymd)
+        out["DateCreated"] = out["DateCreated"].astype(str).apply(brutal_format_ymd)
 
         # 列位重排
         out = out[
