@@ -574,20 +574,41 @@ elif tool == "Order Merge Tool V2":
             comments_text = " | ".join(comments_unique)
 
             # 第2列：DateCreated（尽量取最早）→ 统一格式化 yyyy-mm-dd
-            date_series = g["DateCreated"]
-            parsed = pd.to_datetime(date_series, errors="coerce", dayfirst=True)
-            # 若列中包含字符串，用指定格式强制解析
-            def parse_dates_safe(series):
-                # 优先直接解析 datetime 类型
+            def parse_dates_safe(series: pd.Series) -> pd.Series:
+                """优先保留 Excel 的 datetime；若是字符串则按 dd/mm/yyyy hh:mm:ss AM/PM 解析，解析不到再按 dd/mm/yyyy 兜底。"""
+                # 已经是 datetime 的情况
                 if pd.api.types.is_datetime64_any_dtype(series):
-                    return series.dt.date
-                # 否则尝试按固定格式 dd/mm/yyyy hh:mm:ss AM/PM
-                try:
-                    return pd.to_datetime(series, format="%d/%m/%Y %I:%M:%S %p", errors="coerce", dayfirst=True).dt.date
-                except Exception:
-                    return pd.to_datetime(series, errors="coerce", dayfirst=True).dt.date
+                    return pd.to_datetime(series, errors="coerce")
 
+                s = series.astype(str).str.strip()
+
+                # 先按带时间的格式（AM/PM）
+                parsed = pd.to_datetime(
+                    s, format="%d/%m/%Y %I:%M:%S %p", errors="coerce", dayfirst=True
+                )
+
+                # 还没解析到的，再按只有日期的格式
+                mask = parsed.isna()
+                if mask.any():
+                    parsed.loc[mask] = pd.to_datetime(
+                        s[mask], format="%d/%m/%Y", errors="coerce", dayfirst=True
+                    )
+                return parsed
+
+            date_series = g["DateCreated"]
             parsed = parse_dates_safe(date_series)
+
+            if parsed.notna().any():
+                # 取最早的日期
+                date_value = parsed.min().strftime("%Y-%m-%d")
+            else:
+                # 兜底：取首个非空原始值再尝试解析
+                raw = first_nonempty(date_series.tolist())
+                try:
+                    date_value = pd.to_datetime(raw, dayfirst=True, errors="coerce").strftime("%Y-%m-%d")
+                except Exception:
+                    date_value = str(raw).strip() if raw else ""
+
 
 
             # 第6列：CustomerName（首个非空）
