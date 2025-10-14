@@ -405,27 +405,22 @@ elif tool == "Order Merge Tool":
                 st.error(f"❌ Error: {e}")
     pass
 # ========== TOOL 3: Order Merge Tool V2 ==========
-# ========== TOOL 3: Order Merge Tool V2 ==========
-# ========== TOOL 3: Order Merge Tool V2 ==========
+
 elif tool == "Order Merge Tool V2":
     st.subheader("📋 Order Merge Tool V2")
     st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/instruction%20v2.png)")
 
     st.info(
-        "📢 公告：本工具将旧表（按产品分行）整理为每个 **OrderNumber** 只保留一行的新表。\n\n"
+        "📢 本工具把旧表（按产品分行）整理为每个 **OrderNumber** 一行的新表：\n"
         "- 产品名自动去重合并（Product_Description + Size + Colour）\n"
         "- 第14列输出 PO（形如 PO3513），忽略 “2 Available”\n"
         "- 第15列输出 Items（形如 `qty*合并后产品名`，多件逗号分隔）\n"
-        "- **第二列 DateCreated 严格按 dd/mm/yyyy + 时间解析，并统一输出为 yyyy-mm-dd**\n"
+        "- **第二列 DateCreated 统一格式：yyyy/mm/dd**\n"
         "- 预览支持**一键复制表格（不含表头）**\n"
     )
-
     import streamlit.components.v1 as components
-    from datetime import datetime
 
-    BUILD_ID = "OMTV2-2025-10-14-02"
-
-    file = st.file_uploader("Upload the Excel file (old layout)", type=["xlsx","xls"], key="order_merge_v2")
+    file = st.file_uploader("Upload the Excel file (old layout)", type=["xlsx", "xls"], key="order_merge_v2")
 
     RE_PO = re.compile(r'(?:PO:|<strong>PO:</strong>)\s*#?\s*(\d+)', re.IGNORECASE)
     RE_WS = re.compile(r'\s+')
@@ -435,12 +430,11 @@ elif tool == "Order Merge Tool V2":
         "CustomerName","Phone","Mobile","DeliveryMode","PublicComments","qtyRequired","SourceFrom"
     ]
 
-    # -------- helpers --------
     def clean_str(s):
         if pd.isna(s):
             return ""
         s = str(s)
-        s = re.sub(r"<[^>]*>", "", s)            # 去 HTML 标签
+        s = re.sub(r"<[^>]*>", "", s)
         s = RE_WS.sub(" ", s).strip()
         return s
 
@@ -450,18 +444,15 @@ elif tool == "Order Merge Tool V2":
     def merge_product_name(prod, size, colour):
         p = clean_str(prod); s = clean_str(size); c = clean_str(colour)
         parts = [p] if p else []
-        if s and not contains_ci(p, s):
-            parts.append(s)
+        if s and not contains_ci(p, s): parts.append(s)
         merged = " ".join(parts) if parts else ""
         if c and not contains_ci(merged, c):
             merged = (merged + (" - " if merged else "") + c)
         return merged
 
     def fmt_qty_name(qty, name):
-        if not name:
-            return ""
-        if pd.isna(qty) or str(qty).strip() == "":
-            return name
+        if not name: return ""
+        if pd.isna(qty) or str(qty).strip() == "": return name
         try:
             q = float(qty); q_int = int(q)
             q_str = str(q_int) if abs(q - q_int) < 1e-9 else str(q)
@@ -470,7 +461,6 @@ elif tool == "Order Merge Tool V2":
         return f"{q_str}*{name}"
 
     def extract_pos(value):
-        """提取 POxxxx；对 '2 Available' 类不处理。"""
         if value is None or (isinstance(value, float) and pd.isna(value)):
             return []
         text = str(value)
@@ -487,73 +477,56 @@ elif tool == "Order Merge Tool V2":
                 return str(v).strip()
         return ""
 
-    # —— 日期：严格 dd/mm/yyyy 解析，兼容含时间（AM/PM/24h） ——
-    def _parse_au_datetime(x):
-        """按 dd/mm/yyyy 文化解析；返回 date 或 None。"""
-        if pd.isna(x):
-            return None
+    # —— 关键：稳健解析 dd/mm/yyyy hh:mm:ss AM/PM，并兼容 Excel 序列号 ——
+    def parse_date_cell(x):
+        if pd.isna(x) or str(x).strip() == "":
+            return pd.NaT
         if isinstance(x, (pd.Timestamp, datetime)):
-            return x.date()
-        s = str(x).strip()
-        if not s:
-            return None
-        fmts = [
-            "%d/%m/%Y %I:%M:%S %p",
-            "%d/%m/%Y %I:%M %p",
-            "%d/%m/%Y %H:%M:%S",
-            "%d/%m/%Y %H:%M",
-            "%d/%m/%Y",
-        ]
-        for fmt in fmts:
-            try:
-                return datetime.strptime(s, fmt).date()
-            except ValueError:
-                pass
-        # 兜底仍按 dayfirst=True 尝试
+            return pd.Timestamp(x)
+
+        # 数字：Excel 序列号
         try:
-            return pd.to_datetime(s, errors="raise", dayfirst=True).date()
+            if isinstance(x, (int, float)) or (isinstance(x, str) and re.fullmatch(r"-?\d+(\.\d+)?", x.strip())):
+                val = float(x)
+                dt = pd.to_datetime(val, unit="d", origin="1899-12-30", errors="coerce")
+                if pd.notna(dt): return dt
         except Exception:
-            return None
+            pass
 
-    def _to_ymd(x: object) -> str:
-        d = _parse_au_datetime(x)
-        if d:
-            return d.strftime("%Y-%m-%d")
-        return (str(x).strip() if (x is not None and str(x).strip()) else "")
+        s = str(x).strip()
 
-    # -------- consolidate --------
+        # 明确格式优先：带 AM/PM
+        for fmt in ("%d/%m/%Y %I:%M:%S %p", "%d/%m/%Y %I:%M %p",
+                    "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+            try:
+                return pd.to_datetime(s, format=fmt)
+            except Exception:
+                continue
+
+        # 最后兜底：dayfirst=True
+        return pd.to_datetime(s, dayfirst=True, errors="coerce")
+
     def consolidate(df: pd.DataFrame) -> pd.DataFrame:
-        # 确保缺失列存在
+        # 补齐缺列
         for col in REQUIRED_COLS:
             if col not in df.columns:
                 df[col] = pd.NA
 
         # 预处理
-        df["_MergedName"] = df.apply(
-            lambda r: merge_product_name(r["Product_Description"], r["Size"], r["Colour"]), axis=1
-        )
+        df["_MergedName"] = df.apply(lambda r: merge_product_name(r["Product_Description"], r["Size"], r["Colour"]), axis=1)
         df["_ItemLine"] = [fmt_qty_name(q, n) for q, n in zip(df["qtyRequired"], df["_MergedName"])]
         df["_POs"] = df["SourceFrom"].apply(extract_pos)
 
         def merge_phones(phone, mobile):
             def normalize_phone(v):
-                if pd.isna(v):
-                    return ""
+                if pd.isna(v): return ""
                 s = str(v).strip()
-                if s.endswith(".0"):
-                    s = s[:-2]
-                return s
-            parts = []
-            for v in [phone, mobile]:
-                v = normalize_phone(v)
-                if v:
-                    parts.append(v)
-            # 去重保序
+                return s[:-2] if s.endswith(".0") else s
+            parts = [p for p in (normalize_phone(phone), normalize_phone(mobile)) if p]
             seen, unique = set(), []
             for x in parts:
                 if x not in seen:
-                    seen.add(x)
-                    unique.append(x)
+                    seen.add(x); unique.append(x)
             return ", ".join(unique)
 
         df["_Phones"] = [merge_phones(p, m) for p, m in zip(df["Phone"], df["Mobile"])]
@@ -562,106 +535,92 @@ elif tool == "Order Merge Tool V2":
         for order, g in df.groupby("OrderNumber", dropna=False):
             g = g.copy()
 
-            # 第4列：HomeDelivery，任一行为 'home' 则置 1（优先按 home），否则 'pickup'
+            # HomeDelivery
             delivery_vals = [str(x).strip().lower() for x in g["DeliveryMode"].tolist()]
             home_flag = 1 if any(x == "home" for x in delivery_vals) else "pickup"
 
-            # 第12列：AwaitingPayment 标记
+            # AwaitingPayment
             status_vals = [str(x).strip() for x in g["OrderStatus"].tolist() if str(x).strip()]
             awaiting_flag = 1 if any(x.lower() == "awaiting payment" for x in status_vals) else ""
 
-            # 第15列：Items
-            items = [x for x in g["_ItemLine"].tolist() if x]
-            items_text = ", ".join(items)
-
-            # 第14列：POs（扁平+去重）
+            # Items & POs
+            items_text = ", ".join([x for x in g["_ItemLine"].tolist() if x])
             po_list, seen_po = [], set()
             for sub in g["_POs"].tolist():
                 for x in sub:
                     if x not in seen_po:
-                        seen_po.add(x)
-                        po_list.append(x)
+                        seen_po.add(x); po_list.append(x)
             po_text = ", ".join(po_list)
 
-            # 第7列：ContactPhones（去重）
+            # Phones
             phone_opts = [x for x in g["_Phones"].tolist() if x]
             seen_ph, phone_unique = set(), []
             for x in phone_opts:
                 if x not in seen_ph:
-                    seen_ph.add(x)
-                    phone_unique.append(x)
+                    seen_ph.add(x); phone_unique.append(x)
             phones_text = ", ".join(phone_unique)
 
-            # 第13列：PublicComments（去重，用 " | " 连接）
+            # Comments
             comments_vals = [clean_str(x) for x in g["PublicComments"].tolist() if clean_str(x)]
             seen_c, comments_unique = set(), []
             for x in comments_vals:
                 if x not in seen_c:
-                    seen_c.add(x)
-                    comments_unique.append(x)
+                    seen_c.add(x); comments_unique.append(x)
             comments_text = " | ".join(comments_unique)
 
-            # 第2列：DateCreated（每个订单取最早的一天）→ 统一为 yyyy-mm-dd
-            date_series = g["DateCreated"]
-            dates = [_parse_au_datetime(v) for v in date_series.tolist()]
-            dates = [d for d in dates if d is not None]
-            if dates:
-                date_value = min(dates).strftime("%Y-%m-%d")
+            # DateCreated：组内最早日期 → yyyy/mm/dd
+            parsed_dates = g["DateCreated"].apply(parse_date_cell)
+            if parsed_dates.notna().any():
+                date_value = parsed_dates.min().strftime("%Y/%m/%d")
             else:
-                raw = first_nonempty(date_series.tolist())
-                date_value = _to_ymd(raw)
+                raw = first_nonempty(g["DateCreated"].tolist())
+                dt = parse_date_cell(raw)
+                date_value = dt.strftime("%Y/%m/%d") if pd.notna(dt) else raw
 
-            # 第6列：CustomerName（首个非空）
             customer = first_nonempty(g["CustomerName"].tolist())
 
-            row = {
-                "OrderNumber": order,        # 1
-                "DateCreated": date_value,   # 2
-                "Col3": "",                  # 3 (空)
-                "HomeDelivery": home_flag,   # 4
-                "Col5": "",                  # 5 (空)
-                "CustomerName": customer,    # 6
-                "ContactPhones": phones_text,# 7
-                "Col8": "", "Col9": "", "Col10": "", "Col11": "",  # 8~11 空
-                "AwaitingPayment": awaiting_flag,  # 12
-                "PublicComments": comments_text,   # 13
-                "POs": po_text,                    # 14
-                "Items": items_text,               # 15
-            }
-            rows.append(row)
+            rows.append({
+                "OrderNumber": order,                # 1
+                "DateCreated": date_value,           # 2 (yyyy/mm/dd)
+                "Col3": "",                          # 3
+                "HomeDelivery": home_flag,           # 4
+                "Col5": "",                          # 5
+                "CustomerName": customer,            # 6
+                "ContactPhones": phones_text,        # 7
+                "Col8": "", "Col9": "", "Col10": "", "Col11": "",  # 8~11
+                "AwaitingPayment": awaiting_flag,    # 12
+                "PublicComments": comments_text,     # 13
+                "POs": po_text,                      # 14
+                "Items": items_text,                 # 15
+            })
 
         out = pd.DataFrame(rows)
 
-        # 确保所有列都存在
-        for h in [
-            "OrderNumber","DateCreated","Col3","HomeDelivery","Col5","CustomerName","ContactPhones",
-            "Col8","Col9","Col10","Col11","AwaitingPayment","PublicComments","POs","Items"
-        ]:
-            if h not in out.columns:
-                out[h] = ""
+        # 确保列齐全与顺序
+        wanted = ["OrderNumber","DateCreated","Col3","HomeDelivery","Col5",
+                  "CustomerName","ContactPhones","Col8","Col9","Col10","Col11",
+                  "AwaitingPayment","PublicComments","POs","Items"]
+        for h in wanted:
+            if h not in out.columns: out[h] = ""
+        out = out[wanted]
 
-        # 统一保证为 yyyy-mm-dd 文本
-        out["DateCreated"] = out["DateCreated"].apply(_to_ymd)
+        # 最后一遍强制格式化（防御性）
+        def force_fmt(s):
+            dt = parse_date_cell(s)
+            return dt.strftime("%Y/%m/%d") if pd.notna(dt) else ("" if pd.isna(s) else str(s))
+        out["DateCreated"] = out["DateCreated"].apply(force_fmt)
 
-        # 按 1~15 列位重排
-        out = out[
-            ["OrderNumber","DateCreated","Col3","HomeDelivery","Col5",
-             "CustomerName","ContactPhones","Col8","Col9","Col10","Col11",
-             "AwaitingPayment","PublicComments","POs","Items"]
-        ]
         return out
 
     def validate_columns(df: pd.DataFrame):
-        missing = [c for c in REQUIRED_COLS if c not in df.columns]
-        return missing
+        return [c for c in REQUIRED_COLS if c not in df.columns]
 
     if file:
         try:
-            # 自动兼容 .xlsx / .xls / HTML伪Excel / 误扩展CSV/TSV
             raw_df, converted = read_excel_any(file, return_converted_bytes=True)
 
             if converted:
-                st.info("🔁 检测到 HTML/CSV 伪装的 Excel，已自动转换为真实 .xlsx。")
+                st.info("🔁 检测到 HTML/CSV 伪装的表格，已自动转换为 .xlsx。")
                 st.download_button(
                     "📥 下载自动转换的 .xlsx",
                     converted,
@@ -671,12 +630,12 @@ elif tool == "Order Merge Tool V2":
 
             missing = validate_columns(raw_df)
             if missing:
-                st.error("❌ 缺少以下必要列，请在原表中补齐后再上传：\n\n- " + "\n- ".join(missing))
+                st.error("❌ 缺少以下必要列：\n\n- " + "\n- ".join(missing))
             else:
                 with st.spinner("Processing…"):
                     merged = consolidate(raw_df)
 
-                st.success(f"✅ 处理完成，共 {len(merged)} 条订单（每个 OrderNumber 一行）。  • Build {BUILD_ID}")
+                st.success(f"✅ 处理完成，共 {len(merged)} 条订单（每个 OrderNumber 一行）。")
                 st.dataframe(merged.head(50), use_container_width=True)
 
                 # 一键复制（不含表头）
@@ -684,32 +643,29 @@ elif tool == "Order Merge Tool V2":
                 components.html(f"""
                     <textarea id="mergedTSV" style="position:absolute;left:-10000px;top:-10000px">{tsv_no_header}</textarea>
                     <button onclick="(function(){{
-                        var t=document.getElementById('mergedTSV');
-                        t.select();
+                        var t=document.getElementById('mergedTSV'); t.select();
                         document.execCommand('copy');
-                        alert('✅ 已复制全表（不含表头），可直接粘贴到 Excel/Google Sheets');
+                        alert('✅ 已复制全表（不含表头），可直接粘贴到 Excel / Google Sheets');
                     }})()" style="margin:8px 0; padding:.5em 1em; border-radius:8px; border:1px solid #ccc;">
                         📋 Copy table (no headers)
                     </button>
                 """, height=40)
 
-                # 下载结果（Excel）
-                out = BytesIO()
-                with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+                # 下载 Excel
+                outbuf = BytesIO()
+                with pd.ExcelWriter(outbuf, engine="xlsxwriter") as writer:
                     merged.to_excel(writer, index=False, sheet_name="Consolidated")
-                out.seek(0)
+                outbuf.seek(0)
                 st.download_button(
                     "📥 Download Merged Excel",
-                    data=out,
+                    data=outbuf,
                     file_name="order_merge_v2.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-
         except RuntimeError as e:
             st.error(f"❌ {e}")
         except Exception as e:
             st.error(f"❌ Error: {e}")
-
     pass
 
 
