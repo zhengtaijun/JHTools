@@ -386,6 +386,7 @@ if tool == "TRF Volume Calculator":
 
 
     # ===================== 体积计算流程（带 PO + Invoices + 精简列） =====================
+    # ===================== 体积计算流程（带 PO + Short Description + 精简列） =====================
     def process_volume_file(file_bytes, prod_idx, qty_idx, inv_idx, po_idx):
         dfw = read_excel_any(BytesIO(file_bytes))
 
@@ -401,17 +402,24 @@ if tool == "TRF Volume Calculator":
                 raise ValueError(f"Column index for {label} out of range.")
 
         # 基础列
-        product_names = dfw.iloc[:, prod_idx].fillna("").astype(str).tolist()
+        product_series = dfw.iloc[:, prod_idx].fillna("").astype(str)
+        product_names = product_series.tolist()
         quantities = pd.to_numeric(dfw.iloc[:, qty_idx], errors="coerce").fillna(0)
 
         inv_series = dfw.iloc[:, inv_idx] if inv_idx is not None else pd.Series([""] * len(dfw))
         po_series = dfw.iloc[:, po_idx] if po_idx is not None else pd.Series([""] * len(dfw))
 
-        # 合并 PO No 与 Invoices 到一个单元格（PO 在前，用逗号隔开）
+        # 合并 PO No 与 Invoices 到一个单元格（PO 在前，用逗号隔开，并在数字前加 "PO"）
         merged_ref = []
         for po, inv in zip(po_series, inv_series):
             po_s = "" if pd.isna(po) else str(po).strip()
             inv_s = "" if pd.isna(inv) else str(inv).strip()
+
+            # 在原 PO 号码前统一加上 "PO" 前缀（如果还没有）
+            if po_s:
+                if not po_s.upper().startswith("PO"):
+                    po_s = f"PO{po_s}"
+
             if po_s and inv_s:
                 merged_ref.append(f"{po_s}, {inv_s}")
             elif po_s:
@@ -446,9 +454,9 @@ if tool == "TRF Volume Calculator":
         # 只保留三列 + Volume & Total Volume
         df_res = pd.DataFrame(
             {
-                "PO/Invoice": merged_ref,                         # 合并 PO No + Invoices
-                "Invoices": inv_series.astype(str).fillna(""),    # 原 Invoices
-                "Order Qty": quantities,                          # 数量
+                "PO/Invoice": merged_ref,                     # 合并 PO No + Invoices
+                "Short Description": product_series,          # 产品名列
+                "Order Qty": quantities,                      # 数量
             }
         )
 
@@ -459,7 +467,7 @@ if tool == "TRF Volume Calculator":
         summary = pd.DataFrame(
             {
                 "PO/Invoice": [""],
-                "Invoices": [""],
+                "Short Description": [""],
                 "Order Qty": [""],
                 "Volume": [""],
                 "Total Volume": [df_res["Total Volume"].sum()],
@@ -468,6 +476,7 @@ if tool == "TRF Volume Calculator":
 
         df_final = pd.concat([df_res, summary], ignore_index=True)
         return df_final
+
 
     # ===================== 触发计算与下载 =====================
     if warehouse_file and uploaded_bytes and st.button("Calculate volume"):
