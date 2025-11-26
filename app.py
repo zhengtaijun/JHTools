@@ -530,13 +530,14 @@ elif tool == "Order Merge Tool":
     本工具对比 **仓库发货表（A）** 与 **自制订单表（B）**：
 
     - 自动识别：A 表含 `First Receipt Date` 列；B 表不含  
-    - A 表需要列：`PO No`, `Short Description`, `Order Qty`  
-    - B 表需要列：`Product_Description`, `SourceFrom`, `qtyRequired`, `OrderNumber`  
-    - 对比结果分四种情况并合并为一个表：  
+    - A 表（PO Detail Report）需要列：`PO No`, `Short Description`, `Order Qty`  
+    - B 表（Fulfilment Report）需要列：`Product_Description`, `SourceFrom`, `qtyRequired`, `OrderNumber`  
+    - 对比结果分五种情况并合并为一个表：  
       1️⃣ PO + 产品 + 数量完全匹配（仓库 & 我方一致）  
-      2️⃣ 只有 A 有（仓库多做了 / 我方漏单）  
-      3️⃣ 只有 B 有（我方下单了 / 仓库漏做）  
-      4️⃣ 双方都没有 PO（店内库存 / 展品，无需仓库发货）  
+      2️⃣ PO + 产品 匹配，但数量出错
+      3️⃣ 只有 A 有（仓库多做了 / 我方漏单）  
+      4️⃣ 只有 B 有（我方下单了 / 仓库漏做）  
+      5️⃣ 双方都没有 PO（店内库存 / 展品，无需仓库发货）  
     - 使用产品名称匹配 `product_info.xlsx` 中 CBM，计算体积与总和
     """)
 
@@ -725,8 +726,8 @@ elif tool == "Order Merge Tool":
         return "PO" + s
 
     # ---------- 上传两个文件 ----------
-    fileA = st.file_uploader("📄 Upload **Warehouse file A** (with 'First Receipt Date')", type=["xlsx", "xls"], key="freight_A")
-    fileB = st.file_uploader("📄 Upload **Internal order file B**", type=["xlsx", "xls"], key="freight_B")
+    fileA = st.file_uploader("📄 Upload **PO Detail Report** (with 'First Receipt Date')", type=["xlsx", "xls"], key="freight_A")
+    fileB = st.file_uploader("📄 Upload **Fulfilment Report**", type=["xlsx", "xls"], key="freight_B")
 
     if fileA and fileB and st.button("🔍 Compare & Calculate Volume"):
         try:
