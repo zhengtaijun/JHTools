@@ -128,7 +128,6 @@ tool = st.sidebar.radio(
 )
 
 # ========== TOOL 1: TRF Volume Calculator ==========
-# ========== TOOL 1: TRF Volume Calculator ==========
 if tool == "TRF Volume Calculator":
     st.subheader("📦 TRF Volume Calculator")
     st.markdown("📺 [Instructional video](https://youtu.be/S10a3kPEXZg)")
@@ -524,74 +523,494 @@ if tool == "TRF Volume Calculator":
     pass
 
 # ========== TOOL 2: Order Merge Tool ==========
+# ========== TOOL 2: Order Freight Compare & Volume (New) ==========
 elif tool == "Order Merge Tool":
-    st.subheader("📋 Order Merge Tool")
-    st.markdown("📘 [View User Guide](https://github.com/zhengtaijun/JHTools/blob/main/instructions.md)")
+    st.subheader("🚚 Advanced Freight Compare + Volume")
+    st.markdown("""
+    本工具对比 **仓库发货表（A）** 与 **自制订单表（B）**：
 
-    file1 = st.file_uploader("Upload File 1", type=["xlsx","xls"], key="merge1")
-    file2 = st.file_uploader("Upload File 2", type=["xlsx","xls"], key="merge2")
+    - 自动识别：A 表含 `First Receipt Date` 列；B 表不含  
+    - A 表需要列：`PO No`, `Short Description`, `Order Qty`  
+    - B 表需要列：`Product_Description`, `SourceFrom`, `qtyRequired`, `OrderNumber`  
+    - 对比结果分四种情况并合并为一个表：  
+      1️⃣ PO + 产品 + 数量完全匹配（仓库 & 我方一致）  
+      2️⃣ 只有 A 有（仓库多做了 / 我方漏单）  
+      3️⃣ 只有 B 有（我方下单了 / 仓库漏做）  
+      4️⃣ 双方都没有 PO（店内库存 / 展品，无需仓库发货）  
+    - 使用产品名称匹配 `product_info.xlsx` 中 CBM，计算体积与总和
+    """)
 
-    def clean_phone(num):
-        if pd.notna(num):
-            num = str(int(num)) if isinstance(num, float) else str(num)
-            return num.strip()
-        return ""
+    # ---------- 共用：product_info 体积字典 & 模糊匹配 ----------
+    PRODUCT_INFO_URL = (
+        "https://raw.githubusercontent.com/zhengtaijun/JHCH_TRF-Volume/main/product_info.xlsx"
+    )
 
-    def target_wednesday(inv_date):
-        if not pd.isna(inv_date) and not isinstance(inv_date, pd.Timestamp):
-            inv_date = pd.to_datetime(inv_date)
-        weekday = inv_date.weekday()
-        days = 2 - weekday if weekday <= 2 else 9 - weekday
-        return (inv_date + timedelta(days=days)).date()
+    _WS_RE = re.compile(r"\s+")
+    _PUNCT_RE = re.compile(r"[^a-z0-9]+")
 
-    def process_merge(f1, f2):
-        df1, df2 = read_excel_any(f1), read_excel_any(f2)
-        has1, has2 = "Freight Ex" in df1.columns, "Freight Ex" in df2.columns
-        if has1 and has2:
-            st.error("Both files contain **Freight Ex**; only one should.")
+    ALIASES = {
+        "drawer": ["drawers", "drw", "drws"],
+        "tallboy": ["tall boy", "tall-boy"],
+        "queen": ["qn", "qs", "queen-size", "queen size"],
+        "king": ["kg", "ks", "king-size", "king size"],
+    }
+
+    def _apply_aliases(tokens):
+        out = []
+        for t in tokens:
+            replaced = False
+            for canon, variants in ALIASES.items():
+                if t == canon or t in variants:
+                    out.append(canon)
+                    replaced = True
+                    break
+            if not replaced:
+                out.append(t)
+        return out
+
+    def normalize_name(s: str) -> str:
+        s = (str(s) if s is not None else "").strip().lower()
+        s = _PUNCT_RE.sub(" ", s)
+        s = _WS_RE.sub(" ", s)
+        tokens = s.split()
+        tokens = _apply_aliases(tokens)
+        return " ".join(tokens)
+
+    @st.cache_data
+    def load_product_info_index():
+        resp = requests.get(PRODUCT_INFO_URL)
+        resp.raise_for_status()
+        df = read_excel_any(BytesIO(resp.content))
+
+        if {"Product Name", "CBM"} - set(df.columns):
+            raise ValueError("`Product Name` 和 `CBM` 列在 product_info.xlsx 中是必须的。")
+
+        names = df["Product Name"].fillna("").astype(str).tolist()
+        cbms = pd.to_numeric(df["CBM"], errors="coerce").fillna(0).tolist()
+
+        product_dict_raw = dict(zip(names, cbms))
+
+        norm_index = {}
+        fp_index = {}
+        names_norm_list = []
+
+        for n, c in zip(names, cbms):
+            n_norm = normalize_name(n)
+            n_fp = " ".join(sorted(set(n_norm.split())))
+            norm_index[n_norm] = c
+            fp_index[n_fp] = c
+            names_norm_list.append(n_norm)
+
+        return {
+            "df": df,
+            "product_dict_raw": product_dict_raw,
+            "norm_index": norm_index,
+            "fp_index": fp_index,
+            "names_norm_list": names_norm_list,
+            "names_all": names,
+            "cbms_all": cbms,
+        }
+
+    idx_vol = load_product_info_index()
+
+    @lru_cache(maxsize=4096)
+    def match_product_cmb(name: str):
+        """根据产品名匹配 CBM（复制自 TRF Volume 逻辑）"""
+        if not name:
             return None
-        if not has1 and not has2:
-            st.error("Neither file contains **Freight Ex**.")
-            return None
-        df_freight = df1 if has1 else df2
-        df_main = df2 if has1 else df1
 
-        freight_map = dict(zip(df_freight["Order No"], df_freight["Freight Ex"]))
-        rows = []
+        # 0. 原文精确
+        raw = idx_vol["product_dict_raw"].get(name)
+        if raw is not None:
+            return raw
 
-        for order_no, grp in df_main.groupby("Order No"):
-            inv_date = grp["Inv Date"].iloc[0]
-            row = [
-                order_no,
-                inv_date,
-                target_wednesday(inv_date),
-                1 if freight_map.get(order_no, 0) > 0 else "pickup",
-                "",
-                grp["Bill Name"].iloc[0],
-                " ".join(filter(None, [clean_phone(grp["Billing Phone"].iloc[0]), clean_phone(grp["Billing Mobile"].iloc[0])])),
-                "", "", "", "",
-                1 if grp["Order Status"].iloc[0] == "Awaiting Payment" else "",
-                "", "",
-                ",".join(f"{int(r['Item Qty'])}*{r['Short Description']}" for _, r in grp.iterrows())
-            ]
-            rows.append(row)
+        n_norm = normalize_name(name)
 
-        return pd.DataFrame(rows)
+        # 1. 规范化精确
+        got = idx_vol["norm_index"].get(n_norm)
+        if got is not None:
+            return got
 
-    if file1 and file2 and st.button("Merge orders"):
-        with st.spinner("Processing…"):
-            try:
-                merged = process_merge(file1, file2)
-                if merged is not None:
-                    out = BytesIO()
-                    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
-                        merged.to_excel(writer, index=False, header=False)
-                    out.seek(0)
-                    st.download_button("📥 Download Merged Excel", out, file_name="order_merge.xlsx")
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
-    pass
-# ========== TOOL 3: Order Merge Tool V2 ==========
+        # 2. 指纹精确
+        n_fp = " ".join(sorted(set(n_norm.split())))
+        got = idx_vol["fp_index"].get(n_fp)
+        if got is not None:
+            return got
+
+        # 3a. 前缀模糊
+        tokens = n_norm.split()
+        prefix = " ".join(tokens[:3]) if len(tokens) >= 3 else " ".join(tokens)
+        if prefix:
+            m_prefix = process.extractOne(
+                prefix,
+                [" ".join(t.split()[:3]) for t in idx_vol["names_norm_list"]],
+                scorer=fuzz.token_set_ratio,
+                score_cutoff=90,
+            )
+            if m_prefix:
+                _, _, matched_idx = m_prefix
+                return idx_vol["cbms_all"][matched_idx]
+
+        # 3b. 全名模糊
+        m1 = process.extractOne(
+            n_norm, idx_vol["names_norm_list"], scorer=fuzz.token_set_ratio, score_cutoff=88
+        )
+        if m1:
+            _, _, matched_idx = m1
+            return idx_vol["cbms_all"][matched_idx]
+
+        # 3c. partial 兜底
+        m2 = process.extractOne(
+            n_norm, idx_vol["names_norm_list"], scorer=fuzz.partial_ratio, score_cutoff=85
+        )
+        if m2:
+            _, _, matched_idx = m2
+            return idx_vol["cbms_all"][matched_idx]
+
+        return None
+
+    # ---------- 工具函数：列名自动匹配 ----------
+    def find_col(df: pd.DataFrame, targets, required=True):
+        """
+        在 df.columns 中查找列名，targets 可以是字符串或列表（不区分大小写）；
+        先全等，再包含；找不到且 required=True 则报错。
+        返回 0-based index。
+        """
+        if isinstance(targets, str):
+            targets = [targets]
+        cols_lower = [str(c).strip().lower() for c in df.columns]
+        for t in targets:
+            t_low = t.lower()
+            # 完全匹配
+            for i, c in enumerate(cols_lower):
+                if c == t_low:
+                    return i
+        for t in targets:
+            t_low = t.lower()
+            # 包含匹配
+            for i, c in enumerate(cols_lower):
+                if t_low in c:
+                    return i
+        if required:
+            raise ValueError(f"找不到列：{targets}")
+        return None
+
+    # ---------- 工具函数：规范 PO 编号为文本 "POxxxx" ----------
+    RE_FLOAT_INT = re.compile(r"^\s*(\d+)(?:\.0+)?\s*$")
+    RE_HASH_PO = re.compile(r"#\s*(\d+)")
+    RE_ON_ORDER = re.compile(r"on[- ]order", re.IGNORECASE)
+
+    def normalize_po(value):
+        """把各种格式（1234 / 1234.0 / 'PO1234'）统一为 'PO1234' 文本；空返回 ''。"""
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return ""
+        s = str(value).strip()
+        if not s:
+            return ""
+        # 纯数字或类似 1234.0
+        m = RE_FLOAT_INT.match(s)
+        if m:
+            num = m.group(1)
+            return f"PO{num}"
+        # 已有 PO 前缀
+        s_u = s.upper()
+        if s_u.startswith("PO"):
+            # 去掉可能的 PO00123.0 这类
+            tail = s_u[2:].strip()
+            m2 = RE_FLOAT_INT.match(tail)
+            if m2:
+                return f"PO{m2.group(1)}"
+            return s_u
+        # 其他情况当普通文本，加 PO
+        return "PO" + s
+
+    # ---------- 上传两个文件 ----------
+    fileA = st.file_uploader("📄 Upload **Warehouse file A** (with 'First Receipt Date')", type=["xlsx", "xls"], key="freight_A")
+    fileB = st.file_uploader("📄 Upload **Internal order file B**", type=["xlsx", "xls"], key="freight_B")
+
+    if fileA and fileB and st.button("🔍 Compare & Calculate Volume"):
+        try:
+            # 读取
+            dfA = read_excel_any(fileA)
+            dfB = read_excel_any(fileB)
+
+            colsA = [str(c) for c in dfA.columns]
+            colsB = [str(c) for c in dfB.columns]
+
+            has_first_A = any("first receipt date" in str(c).lower() for c in colsA)
+            has_first_B = any("first receipt date" in str(c).lower() for c in colsB)
+
+            # 自动纠正 A/B 角色：谁含 First Receipt Date 谁就是 A
+            if has_first_B and not has_first_A:
+                dfA, dfB = dfB, dfA
+                colsA, colsB = colsB, colsA
+                st.info("ℹ️ 检测到第二个文件才包含 `First Receipt Date`，已自动将其视为表格 A（仓库表）。")
+            elif not has_first_A:
+                st.warning("⚠️ 未在任一文件中发现 `First Receipt Date` 列，请确认文件是否上传正确。")
+
+            # ---- 找 A 表列：PO No / Short Description / Order Qty ----
+            idxA_po = find_col(dfA, ["PO No", "PONo", "PO_Number"])
+            idxA_desc = find_col(dfA, ["Short Description", "Short_Description", "Description"])
+            idxA_qty = find_col(dfA, ["Order Qty", "OrderQty", "Qty"])
+
+            # ---- 找 B 表列：Product_Description / SourceFrom / qtyRequired / OrderNumber ----
+            idxB_desc = find_col(dfB, ["Product_Description", "Product Description", "Product"])
+            idxB_source = find_col(dfB, ["SourceFrom", "Source From"])
+            idxB_qty = find_col(dfB, ["qtyRequired", "Qty Required", "Order Qty", "OrderQty"])
+            idxB_order = find_col(dfB, ["OrderNumber", "Order Number", "OrderNo"])
+
+            # 预览
+            with st.expander("👀 Preview A (warehouse)", expanded=False):
+                st.write(dfA.head())
+            with st.expander("👀 Preview B (internal)", expanded=False):
+                st.write(dfB.head())
+
+            # ---------- 预处理 A 表 ----------
+            rowsA = []
+            for i, r in dfA.iterrows():
+                po_raw = r.iloc[idxA_po]
+                po_norm = normalize_po(po_raw)
+                has_po = bool(po_norm)
+
+                desc = str(r.iloc[idxA_desc]) if not pd.isna(r.iloc[idxA_desc]) else ""
+                desc_norm = normalize_name(desc)
+
+                qty_raw = r.iloc[idxA_qty]
+                try:
+                    qty = int(float(qty_raw)) if str(qty_raw).strip() != "" else 0
+                except Exception:
+                    qty = 0
+
+                rowsA.append(
+                    dict(
+                        idx=i,
+                        po=po_norm,
+                        has_po=has_po,
+                        desc=desc,
+                        desc_norm=desc_norm,
+                        qty=qty,
+                    )
+                )
+
+            # ---------- 预处理 B 表 ----------
+            rowsB = []
+            for i, r in dfB.iterrows():
+                src = "" if pd.isna(r.iloc[idxB_source]) else str(r.iloc[idxB_source])
+                src_low = src.lower()
+
+                # 判断是否 On-Order + 提取 #xxxx
+                has_on_order = bool(RE_ON_ORDER.search(src_low))
+                m_po = RE_HASH_PO.search(src)
+                po_norm = ""
+                has_po = False
+                if has_on_order and m_po:
+                    po_norm = normalize_po(m_po.group(1))
+                    has_po = bool(po_norm)
+
+                desc = "" if pd.isna(r.iloc[idxB_desc]) else str(r.iloc[idxB_desc])
+                desc_norm = normalize_name(desc)
+
+                qty_raw = r.iloc[idxB_qty]
+                try:
+                    qty = int(float(qty_raw)) if str(qty_raw).strip() != "" else 0
+                except Exception:
+                    qty = 0
+
+                order_no = "" if pd.isna(r.iloc[idxB_order]) else str(r.iloc[idxB_order]).strip()
+
+                rowsB.append(
+                    dict(
+                        idx=i,
+                        po=po_norm,
+                        has_po=has_po,
+                        desc=desc,
+                        desc_norm=desc_norm,
+                        qty=qty,
+                        order_no=order_no,
+                    )
+                )
+
+            # ---------- 按 (PO, desc_norm, qty) 建立 key ----------
+            A_by_key = {}
+            for ra in rowsA:
+                if not ra["has_po"]:
+                    continue
+                key = (ra["po"], ra["desc_norm"], ra["qty"])
+                A_by_key.setdefault(key, []).append(ra)
+
+            B_by_key = {}
+            for rb in rowsB:
+                if not rb["has_po"]:
+                    continue
+                key = (rb["po"], rb["desc_norm"], rb["qty"])
+                B_by_key.setdefault(key, []).append(rb)
+
+            # ---------- Part 1：PO+产品+数量完全匹配 ----------
+            part1 = []
+            matchedA = set()
+            matchedB = set()
+
+            common_keys = set(A_by_key.keys()) & set(B_by_key.keys())
+            for key in common_keys:
+                a_list = A_by_key[key]
+                b_list = B_by_key[key]
+                for ra, rb in zip(a_list, b_list):
+                    matchedA.add(ra["idx"])
+                    matchedB.add(rb["idx"])
+                    po_cell = ra["po"]
+                    if rb["order_no"]:
+                        po_cell = f"{po_cell}, {rb['order_no']}"
+                    product = rb["desc"] or ra["desc"]
+                    qty = ra["qty"]  # 相同
+                    part1.append(
+                        dict(
+                            Category="1. Match (A & B)",
+                            PO_Order=po_cell,
+                            Product=product,
+                            Qty=qty,
+                        )
+                    )
+
+            # ---------- Part 2：只有 A 有（A 有 PO & 未匹配到 B） ----------
+            part2 = []
+            for ra in rowsA:
+                if not ra["has_po"]:
+                    continue
+                if ra["idx"] in matchedA:
+                    continue
+                part2.append(
+                    dict(
+                        Category="2. Only in A (warehouse extra)",
+                        PO_Order=ra["po"],
+                        Product=ra["desc"],
+                        Qty=ra["qty"],
+                    )
+                )
+
+            # ---------- Part 3：只有 B 有 PO（B 有 PO & 未匹配到 A） ----------
+            part3 = []
+            for rb in rowsB:
+                if not rb["has_po"]:
+                    continue
+                if rb["idx"] in matchedB:
+                    continue
+                po_cell = rb["po"]
+                if rb["order_no"]:
+                    po_cell = f"{po_cell}, {rb['order_no']}"
+                part3.append(
+                    dict(
+                        Category="3. Only in B (our order, warehouse missing)",
+                        PO_Order=po_cell,
+                        Product=rb["desc"],
+                        Qty=rb["qty"],
+                    )
+                )
+
+            # ---------- Part 4：双方都没有 PO（B 没 PO，视为店内库存/展品） ----------
+            part4 = []
+            for rb in rowsB:
+                if rb["has_po"]:
+                    continue
+                part4.append(
+                    dict(
+                        Category="4. No PO (store stock / display)",
+                        PO_Order=rb["order_no"],
+                        Product=rb["desc"],
+                        Qty=rb["qty"],
+                    )
+                )
+
+            # ---------- 合并四部分，计算 Volume ----------
+            all_rows = part1 + part2 + part3 + part4
+            if not all_rows:
+                st.error("未找到任何记录，请检查两个表格内容是否正确。")
+            else:
+                df_result = pd.DataFrame(all_rows)
+
+                # 体积匹配
+                vols = []
+                for name in df_result["Product"].tolist():
+                    v = match_product_cmb(name or "")
+                    vols.append(v if v is not None else 0)
+                df_result["Volume"] = pd.to_numeric(pd.Series(vols), errors="coerce").fillna(0)
+
+                df_result["Qty"] = pd.to_numeric(df_result["Qty"], errors="coerce").fillna(0)
+                df_result["Total Volume"] = df_result["Volume"] * df_result["Qty"]
+
+                total_volume_sum = df_result["Total Volume"].sum()
+
+                # 最后一行汇总
+                summary_row = {
+                    "Category": "TOTAL",
+                    "PO_Order": "",
+                    "Product": "",
+                    "Qty": "",
+                    "Volume": "",
+                    "Total Volume": total_volume_sum,
+                }
+                df_final = pd.concat([df_result, pd.DataFrame([summary_row])], ignore_index=True)
+
+                st.success(f"✅ Completed. Total rows: {len(df_result)}, Total Volume: **{total_volume_sum:.3f} m³**")
+
+                # 分部分展示
+                st.markdown("### 📊 Part 1 – 完全匹配（仓库 & 我方一致）")
+                st.dataframe(df_result[df_result["Category"] == "1. Match (A & B)"][["PO_Order","Product","Qty","Volume","Total Volume"]], use_container_width=True)
+
+                st.markdown("### 📊 Part 2 – 仅 A 有（仓库多做 / 我方漏单）")
+                st.dataframe(df_result[df_result["Category"] == "2. Only in A (warehouse extra)"][["PO_Order","Product","Qty","Volume","Total Volume"]], use_container_width=True)
+
+                st.markdown("### 📊 Part 3 – 仅 B 有 PO（我方下单 / 仓库漏做）")
+                st.dataframe(df_result[df_result["Category"] == "3. Only in B (our order, warehouse missing)"][["PO_Order","Product","Qty","Volume","Total Volume"]], use_container_width=True)
+
+                st.markdown("### 📊 Part 4 – 无 PO（店内库存 / 展品）")
+                st.dataframe(df_result[df_result["Category"] == "4. No PO (store stock / display)"][["PO_Order","Product","Qty","Volume","Total Volume"]], use_container_width=True)
+
+                st.markdown("### 📒 Full merged table")
+                st.dataframe(df_final, use_container_width=True)
+
+                # 导出到带颜色的 Excel
+                out = BytesIO()
+                with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+                    df_final.to_excel(writer, index=False, sheet_name="Compare")
+                    workbook = writer.book
+                    worksheet = writer.sheets["Compare"]
+
+                    fmt_part1 = workbook.add_format({"bg_color": "#C6EFCE"})  # 绿
+                    fmt_part2 = workbook.add_format({"bg_color": "#FFEB9C"})  # 黄
+                    fmt_part3 = workbook.add_format({"bg_color": "#FFC7CE"})  # 红
+                    fmt_part4 = workbook.add_format({"bg_color": "#D9E1F2"})  # 蓝
+                    fmt_total = workbook.add_format({"bold": True})
+
+                    # 根据 Category 设置整行背景色
+                    cat_col_idx = df_final.columns.get_loc("Category")
+                    for row_idx in range(1, len(df_final) + 1):  # Excel 行，从 1 开始（0 是表头）
+                        cat = df_final.iloc[row_idx - 1, cat_col_idx]
+                        fmt = None
+                        if cat.startswith("1. "):
+                            fmt = fmt_part1
+                        elif cat.startswith("2. "):
+                            fmt = fmt_part2
+                        elif cat.startswith("3. "):
+                            fmt = fmt_part3
+                        elif cat.startswith("4. "):
+                            fmt = fmt_part4
+                        elif cat == "TOTAL":
+                            fmt = fmt_total
+                        if fmt:
+                            worksheet.set_row(row_idx, None, fmt)
+
+                out.seek(0)
+                st.download_button(
+                    "📥 Download Excel (with colored sections)",
+                    out,
+                    file_name="freight_compare_volume.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+        except Exception as e:
+            st.error(f"❌ Error: {e}")
+        pass
+
 # ========== TOOL 3: Order Merge Tool V2 ==========
 elif tool == "Order Merge Tool V2":
     st.subheader("📋 Order Merge Tool V2")
