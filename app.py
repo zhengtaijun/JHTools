@@ -698,7 +698,7 @@ elif tool == "Order Merge Tool":
     # ---------- 工具函数：规范 PO 编号为文本 "POxxxx" ----------
     RE_FLOAT_INT = re.compile(r"^\s*(\d+)(?:\.0+)?\s*$")
     RE_HASH_PO = re.compile(r"#\s*(\d+)")
-    RE_ON_ORDER = re.compile(r"on[- ]order", re.IGNORECASE)
+    RE_NEED_ORDER = re.compile(r"(on[- ]order|pending)", re.IGNORECASE)
 
     def normalize_po(value):
         """把各种格式（1234 / 1234.0 / 'PO1234'）统一为 'PO1234' 文本；空返回 ''。"""
@@ -798,12 +798,12 @@ elif tool == "Order Merge Tool":
                 src = "" if pd.isna(r.iloc[idxB_source]) else str(r.iloc[idxB_source])
                 src_low = src.lower()
 
-                # 判断是否 On-Order + 提取 #xxxx
-                has_on_order = bool(RE_ON_ORDER.search(src_low))
+                ## 判断是否需要订货：SourceFrom 中包含 On-Order 或 Pending
+                need_order = bool(RE_NEED_ORDER.search(src_low))
                 m_po = RE_HASH_PO.search(src)
                 po_norm = ""
                 has_po = False
-                if has_on_order and m_po:
+                if need_order and m_po:
                     po_norm = normalize_po(m_po.group(1))
                     has_po = bool(po_norm)
 
@@ -831,97 +831,127 @@ elif tool == "Order Merge Tool":
                 )
 
             # ---------- 按 (PO, desc_norm, qty) 建立 key ----------
-            A_by_key = {}
+            # ---------- 先按 (PO, desc_norm) 聚合，方便对比数量 ----------
+            # A：只看有 PO 的行
+            A_group = {}
             for ra in rowsA:
                 if not ra["has_po"]:
                     continue
-                key = (ra["po"], ra["desc_norm"], ra["qty"])
-                A_by_key.setdefault(key, []).append(ra)
+                key = (ra["po"], ra["desc_norm"])
+                if key not in A_group:
+                    A_group[key] = {
+                        "po": ra["po"],
+                        "desc": ra["desc"],
+                        "qty": 0,
+                    }
+                A_group[key]["qty"] += ra["qty"]
 
-            B_by_key = {}
+            # B：只看有 PO 的行，同时聚合 OrderNumber（多个就合并）
+            B_group = {}
             for rb in rowsB:
                 if not rb["has_po"]:
                     continue
-                key = (rb["po"], rb["desc_norm"], rb["qty"])
-                B_by_key.setdefault(key, []).append(rb)
+                key = (rb["po"], rb["desc_norm"])
+                if key not in B_group:
+                    B_group[key] = {
+                        "po": rb["po"],
+                        "desc": rb["desc"],
+                        "qty": 0,
+                        "orders": [],
+                    }
+                B_group[key]["qty"] += rb["qty"]
+                if rb["order_no"]:
+                    B_group[key]["orders"].append(rb["order_no"])
 
-            # ---------- Part 1：PO+产品+数量完全匹配 ----------
-            part1 = []
-            matchedA = set()
-            matchedB = set()
+            # ---------- Part 1 & Part 2：交集里的 “完全匹配” 和 “数量不一致” ----------
+            part1 = []  # 完全匹配
+            part2 = []  # 数量不一致（PO + 产品一致，qty 不同）
 
-            common_keys = set(A_by_key.keys()) & set(B_by_key.keys())
+            common_keys = set(A_group.keys()) & set(B_group.keys())
             for key in common_keys:
-                a_list = A_by_key[key]
-                b_list = B_by_key[key]
-                for ra, rb in zip(a_list, b_list):
-                    matchedA.add(ra["idx"])
-                    matchedB.add(rb["idx"])
-                    po_cell = ra["po"]
-                    if rb["order_no"]:
-                        po_cell = f"{po_cell}, {rb['order_no']}"
-                    product = rb["desc"] or ra["desc"]
-                    qty = ra["qty"]  # 相同
+                ga = A_group[key]
+                gb = B_group[key]
+                qty_a = ga["qty"]
+                qty_b = gb["qty"]
+
+                # 合并 PO + OrderNumber
+                po_cell = ga["po"]
+                if gb["orders"]:
+                    # 多个订单号用逗号拼在后面
+                    po_cell = po_cell + ", " + ", ".join(gb["orders"])
+
+                product = gb["desc"] or ga["desc"]  # 优先用 B 的描述
+
+                if qty_a == qty_b:
                     part1.append(
                         dict(
                             Category="1. Match (A & B)",
                             PO_Order=po_cell,
                             Product=product,
-                            Qty=qty,
+                            Qty=qty_a,
+                        )
+                    )
+                else:
+                    # 数量不一致：仍然以 A 的数量作为体积计算的基准
+                    part2.append(
+                        dict(
+                            Category="2. Qty mismatch (PO & product same)",
+                            PO_Order=po_cell,
+                            Product=product,
+                            Qty=qty_a,
+                            # 如果后面你想看 B 的数量，也可以额外加一列 Qty_B
+                            # Qty_B=qty_b,
                         )
                     )
 
-            # ---------- Part 2：只有 A 有（A 有 PO & 未匹配到 B） ----------
-            part2 = []
-            for ra in rowsA:
-                if not ra["has_po"]:
-                    continue
-                if ra["idx"] in matchedA:
-                    continue
-                part2.append(
-                    dict(
-                        Category="2. Only in A (warehouse extra)",
-                        PO_Order=ra["po"],
-                        Product=ra["desc"],
-                        Qty=ra["qty"],
-                    )
-                )
-
-            # ---------- Part 3：只有 B 有 PO（B 有 PO & 未匹配到 A） ----------
+            # ---------- Part 3：只在 A 有（仓库有，我们没下单 / 下少了） ----------
             part3 = []
-            for rb in rowsB:
-                if not rb["has_po"]:
-                    continue
-                if rb["idx"] in matchedB:
-                    continue
-                po_cell = rb["po"]
-                if rb["order_no"]:
-                    po_cell = f"{po_cell}, {rb['order_no']}"
+            onlyA_keys = set(A_group.keys()) - set(B_group.keys())
+            for key in onlyA_keys:
+                ga = A_group[key]
                 part3.append(
                     dict(
-                        Category="3. Only in B (our order, warehouse missing)",
-                        PO_Order=po_cell,
-                        Product=rb["desc"],
-                        Qty=rb["qty"],
+                        Category="3. Only in A (warehouse extra)",
+                        PO_Order=ga["po"],
+                        Product=ga["desc"],
+                        Qty=ga["qty"],
                     )
                 )
 
-            # ---------- Part 4：双方都没有 PO（B 没 PO，视为店内库存/展品） ----------
+            # ---------- Part 4：只在 B 有 PO（我们下单，仓库没做） ----------
             part4 = []
+            onlyB_keys = set(B_group.keys()) - set(A_group.keys())
+            for key in onlyB_keys:
+                gb = B_group[key]
+                po_cell = gb["po"]
+                if gb["orders"]:
+                    po_cell = po_cell + ", " + ", ".join(gb["orders"])
+                part4.append(
+                    dict(
+                        Category="4. Only in B (our order, warehouse missing)",
+                        PO_Order=po_cell,
+                        Product=gb["desc"],
+                        Qty=gb["qty"],
+                    )
+                )
+
+            # ---------- Part 5：双方都没 PO（店内库存 / 展品） ----------
+            # 这里仍按 B 表中 “没有 PO 的行” 视为店内库存
+            part5 = []
             for rb in rowsB:
                 if rb["has_po"]:
                     continue
-                part4.append(
+                part5.append(
                     dict(
-                        Category="4. No PO (store stock / display)",
+                        Category="5. No PO (store stock / display)",
                         PO_Order=rb["order_no"],
                         Product=rb["desc"],
                         Qty=rb["qty"],
                     )
                 )
 
-            # ---------- 合并四部分，计算 Volume ----------
-            all_rows = part1 + part2 + part3 + part4
+            # ---------- 合并五部分，计算 Volume ----------
+            all_rows = part1 + part2 + part3 + part4 + part5
             if not all_rows:
                 st.error("未找到任何记录，请检查两个表格内容是否正确。")
             else:
@@ -954,19 +984,35 @@ elif tool == "Order Merge Tool":
 
                 # 分部分展示
                 st.markdown("### 📊 Part 1 – 完全匹配（仓库 & 我方一致）")
-                st.dataframe(df_result[df_result["Category"] == "1. Match (A & B)"][["PO_Order","Product","Qty","Volume","Total Volume"]], use_container_width=True)
+                st.dataframe(
+                    df_result[df_result["Category"] == "1. Match (A & B)"][["PO_Order","Product","Qty","Volume","Total Volume"]],
+                    use_container_width=True,
+                )
 
-                st.markdown("### 📊 Part 2 – 仅 A 有（仓库多做 / 我方漏单）")
-                st.dataframe(df_result[df_result["Category"] == "2. Only in A (warehouse extra)"][["PO_Order","Product","Qty","Volume","Total Volume"]], use_container_width=True)
+                st.markdown("### 📊 Part 2 – 数量不一致（PO & 产品相同）")
+                st.dataframe(
+                    df_result[df_result["Category"] == "2. Qty mismatch (PO & product same)"][["PO_Order","Product","Qty","Volume","Total Volume"]],
+                    use_container_width=True,
+                )
 
-                st.markdown("### 📊 Part 3 – 仅 B 有 PO（我方下单 / 仓库漏做）")
-                st.dataframe(df_result[df_result["Category"] == "3. Only in B (our order, warehouse missing)"][["PO_Order","Product","Qty","Volume","Total Volume"]], use_container_width=True)
+                st.markdown("### 📊 Part 3 – 仅 A 有（仓库多做 / 我方漏单）")
+                st.dataframe(
+                    df_result[df_result["Category"] == "3. Only in A (warehouse extra)"][["PO_Order","Product","Qty","Volume","Total Volume"]],
+                    use_container_width=True,
+                )
 
-                st.markdown("### 📊 Part 4 – 无 PO（店内库存 / 展品）")
-                st.dataframe(df_result[df_result["Category"] == "4. No PO (store stock / display)"][["PO_Order","Product","Qty","Volume","Total Volume"]], use_container_width=True)
+                st.markdown("### 📊 Part 4 – 仅 B 有 PO（我方下单 / 仓库漏做）")
+                st.dataframe(
+                    df_result[df_result["Category"] == "4. Only in B (our order, warehouse missing)"][["PO_Order","Product","Qty","Volume","Total Volume"]],
+                    use_container_width=True,
+                )
 
-                st.markdown("### 📒 Full merged table")
-                st.dataframe(df_final, use_container_width=True)
+                st.markdown("### 📊 Part 5 – 无 PO（店内库存 / 展品）")
+                st.dataframe(
+                    df_result[df_result["Category"] == "5. No PO (store stock / display)"][["PO_Order","Product","Qty","Volume","Total Volume"]],
+                    use_container_width=True,
+                )
+
 
                 # 导出到带颜色的 Excel
                 out = BytesIO()
@@ -975,29 +1021,32 @@ elif tool == "Order Merge Tool":
                     workbook = writer.book
                     worksheet = writer.sheets["Compare"]
 
-                    fmt_part1 = workbook.add_format({"bg_color": "#C6EFCE"})  # 绿
-                    fmt_part2 = workbook.add_format({"bg_color": "#FFEB9C"})  # 黄
-                    fmt_part3 = workbook.add_format({"bg_color": "#FFC7CE"})  # 红
-                    fmt_part4 = workbook.add_format({"bg_color": "#D9E1F2"})  # 蓝
+                    fmt_part1 = workbook.add_format({"bg_color": "#C6EFCE"})  # 绿：完全匹配
+                    fmt_part2 = workbook.add_format({"bg_color": "#F8CBAD"})  # 橙：数量不一致
+                    fmt_part3 = workbook.add_format({"bg_color": "#FFEB9C"})  # 黄：只在 A
+                    fmt_part4 = workbook.add_format({"bg_color": "#FFC7CE"})  # 红：只在 B
+                    fmt_part5 = workbook.add_format({"bg_color": "#D9E1F2"})  # 蓝：无 PO
                     fmt_total = workbook.add_format({"bold": True})
 
-                    # 根据 Category 设置整行背景色
                     cat_col_idx = df_final.columns.get_loc("Category")
-                    for row_idx in range(1, len(df_final) + 1):  # Excel 行，从 1 开始（0 是表头）
+                    for row_idx in range(1, len(df_final) + 1):
                         cat = df_final.iloc[row_idx - 1, cat_col_idx]
                         fmt = None
                         if cat.startswith("1. "):
                             fmt = fmt_part1
-                        elif cat.startswith("2. "):
+                        elif cat.startswith("2. Qty"):
                             fmt = fmt_part2
-                        elif cat.startswith("3. "):
+                        elif cat.startswith("3. Only in A"):
                             fmt = fmt_part3
-                        elif cat.startswith("4. "):
+                        elif cat.startswith("4. Only in B"):
                             fmt = fmt_part4
+                        elif cat.startswith("5. No PO"):
+                            fmt = fmt_part5
                         elif cat == "TOTAL":
                             fmt = fmt_total
                         if fmt:
                             worksheet.set_row(row_idx, None, fmt)
+
 
                 out.seek(0)
                 st.download_button(
