@@ -128,6 +128,7 @@ tool = st.sidebar.radio(
 )
 
 # ========== TOOL 1: TRF Volume Calculator ==========
+# ========== TOOL 1: TRF Volume Calculator ==========
 if tool == "TRF Volume Calculator":
     st.subheader("📦 TRF Volume Calculator")
     st.markdown("📺 [Instructional video](https://youtu.be/S10a3kPEXZg)")
@@ -136,16 +137,14 @@ if tool == "TRF Volume Calculator":
         "https://raw.githubusercontent.com/zhengtaijun/JHCH_TRF-Volume/main/product_info.xlsx"
     )
 
-    # ===================== 统一标准化与别名归一 =====================
+    # ===================== 统一标准化与别名归一（保持原有逻辑） =====================
 
     _WS_RE = re.compile(r"\s+")
     _PUNCT_RE = re.compile(r"[^a-z0-9]+")
 
-    # 可按你的库继续扩充变体（左：规范词 右：可能写法）
     ALIASES = {
         "drawer": ["drawers", "drw", "drws"],
         "tallboy": ["tall boy", "tall-boy"],
-        # 尺寸/型号常见缩写（示例）
         "queen": ["qn", "qs", "queen-size", "queen size"],
         "king": ["kg", "ks", "king-size", "king size"],
     }
@@ -165,18 +164,16 @@ if tool == "TRF Volume Calculator":
 
     def normalize(s: str) -> str:
         s = s.strip().lower()
-        s = _PUNCT_RE.sub(" ", s)      # 去标点
-        s = _WS_RE.sub(" ", s)         # 合并空格
+        s = _PUNCT_RE.sub(" ", s)
+        s = _WS_RE.sub(" ", s)
         tokens = s.split()
-        tokens = _apply_aliases(tokens) # 同义词归一
+        tokens = _apply_aliases(tokens)
         return " ".join(tokens)
 
     def fingerprint(s: str) -> str:
-        # 去重 + 排序，弱化词序与重复的影响
         toks = normalize(s).split()
         return " ".join(sorted(set(toks)))
 
-    # ===================== 读取产品信息并建立多索引 =====================
     @st.cache_data
     def load_product_info_and_build_index():
         resp = requests.get(PRODUCT_INFO_URL)
@@ -192,14 +189,10 @@ if tool == "TRF Volume Calculator":
         names = df["Product Name"].fillna("").astype(str).tolist()
         cbms = pd.to_numeric(df["CBM"], errors="coerce").fillna(0).tolist()
 
-        # 原始字典（最快路径）
         product_dict_raw = dict(zip(names, cbms))
 
-        # 规范化与指纹索引
         norm_index = {}
         fp_index = {}
-
-        # 供模糊匹配使用的并行列表（与 names/cbms 对齐）
         names_norm_list = []
 
         for n, c in zip(names, cbms):
@@ -221,51 +214,38 @@ if tool == "TRF Volume Calculator":
 
     idx = load_product_info_and_build_index()
 
-    # ===================== 文件上传与列位设置 =====================
-    warehouse_file = st.file_uploader("Upload warehouse export (Excel)", type=["xlsx","xls"])
-    col_prod = st.number_input("Column # of **Product Name**", min_value=1, value=3)
-    col_order = st.number_input("Column # of **Order Number**", min_value=1, value=7)
-    col_qty = st.number_input("Column # of **Quantity**", min_value=1, value=8)
-
-    # ===================== 多阶段匹配（带缓存） =====================
-    # ===================== 多阶段匹配（带前缀权重 + 缓存） =====================
     @lru_cache(maxsize=4096)
     def match_product(name: str):
         if not name:
             return None
 
-        # Stage 0: 原文精确
         raw = idx["product_dict_raw"].get(name)
         if raw is not None:
             return raw
 
-        # Stage 1: 规范化精确
         n_norm = normalize(name)
         got = idx["norm_index"].get(n_norm)
         if got is not None:
             return got
 
-        # Stage 2: token 指纹精确
         n_fp = " ".join(sorted(set(n_norm.split())))
         got = idx["fp_index"].get(n_fp)
         if got is not None:
             return got
 
-        # ---------- Stage 3a: 前缀优先模糊 ----------
         tokens = n_norm.split()
         prefix = " ".join(tokens[:3]) if len(tokens) >= 3 else " ".join(tokens)
         if prefix:
             m_prefix = process.extractOne(
                 prefix,
-                [ " ".join(t.split()[:3]) for t in idx["names_norm_list"] ],
+                [" ".join(t.split()[:3]) for t in idx["names_norm_list"]],
                 scorer=fuzz.token_set_ratio,
-                score_cutoff=90
+                score_cutoff=90,
             )
             if m_prefix:
                 _, _, matched_idx = m_prefix
                 return idx["cbms_all"][matched_idx]
 
-        # ---------- Stage 3b: 全名模糊（token_set_ratio） ----------
         m1 = process.extractOne(
             n_norm, idx["names_norm_list"], scorer=fuzz.token_set_ratio, score_cutoff=88
         )
@@ -273,7 +253,6 @@ if tool == "TRF Volume Calculator":
             _, _, matched_idx = m1
             return idx["cbms_all"][matched_idx]
 
-        # ---------- Stage 3c: partial_ratio 兜底 ----------
         m2 = process.extractOne(
             n_norm, idx["names_norm_list"], scorer=fuzz.partial_ratio, score_cutoff=85
         )
@@ -281,14 +260,143 @@ if tool == "TRF Volume Calculator":
             _, _, matched_idx = m2
             return idx["cbms_all"][matched_idx]
 
-        return None  # 未命中
+        return None
 
-    # ===================== 体积计算流程（含并行） =====================
-    def process_volume_file(file, p_col, q_col):
-        dfw = read_excel_any(file)
-        product_names = dfw.iloc[:, p_col].fillna("").astype(str).tolist()
-        quantities = pd.to_numeric(dfw.iloc[:, q_col], errors="coerce").fillna(0)
+    # ===================== 上传文件 + 自动识别列 =====================
+    warehouse_file = st.file_uploader("Upload warehouse export (Excel)", type=["xlsx", "xls"])
 
+    df_preview = None
+    uploaded_bytes = None
+    n_cols = 0
+
+    if warehouse_file:
+        try:
+            uploaded_bytes = warehouse_file.getvalue()
+            df_preview = read_excel_any(BytesIO(uploaded_bytes))
+            n_cols = df_preview.shape[1]
+
+            with st.expander("📋 Preview uploaded file & columns", expanded=False):
+                st.write(df_preview.head())
+                st.write("Columns:", list(df_preview.columns))
+        except Exception as e:
+            st.error(f"❌ Failed to read uploaded file: {e}")
+
+    # ---- 用户可编辑的表头关键字（默认用你的标题） ----
+    st.markdown("### 🔠 Column headers (auto-detect, editable)")
+    header_prod = st.text_input("Header for **Product Name**", value="Short Description")
+    header_order = st.text_input("Header for **Order Number** (Invoices)", value="Invoices")
+    header_qty = st.text_input("Header for **Quantity**", value="Order Qty")
+    header_po = st.text_input("Header for **PO Number**", value="PO No")
+
+    # ---- 根据表头尝试自动检测列号，用于给 number_input 预填值 ----
+    def _auto_detect_col(df, header_name, fallback=1):
+        if df is None or not header_name:
+            return fallback
+        cols_lower = [str(c).strip().lower() for c in df.columns]
+        target = header_name.strip().lower()
+        # 先完全匹配
+        for i, c in enumerate(cols_lower):
+            if c == target:
+                return i + 1  # 1-based
+        # 再做包含匹配
+        for i, c in enumerate(cols_lower):
+            if target in c:
+                return i + 1
+        return fallback
+
+    if n_cols == 0:
+        max_cols = 50
+    else:
+        max_cols = n_cols
+
+    auto_prod = _auto_detect_col(df_preview, header_prod, fallback=3)
+    auto_order = _auto_detect_col(df_preview, header_order, fallback=7)
+    auto_qty = _auto_detect_col(df_preview, header_qty, fallback=8)
+    auto_po = _auto_detect_col(df_preview, header_po, fallback=1)
+
+    # ---- 手动列号（1-based），默认显示自动匹配到的值，仍可修改 ----
+    st.markdown("### #️⃣ Column numbers (1-based, optional override)")
+    col_prod = st.number_input(
+        "Column # of **Product Name**",
+        min_value=1,
+        max_value=max_cols,
+        value=min(max(auto_prod, 1), max_cols),
+    )
+    col_order = st.number_input(
+        "Column # of **Order Number (Invoices)**",
+        min_value=1,
+        max_value=max_cols,
+        value=min(max(auto_order, 1), max_cols),
+    )
+    col_qty = st.number_input(
+        "Column # of **Quantity**",
+        min_value=1,
+        max_value=max_cols,
+        value=min(max(auto_qty, 1), max_cols),
+    )
+    col_po = st.number_input(
+        "Column # of **PO Number**",
+        min_value=1,
+        max_value=max_cols,
+        value=min(max(auto_po, 1), max_cols),
+    )
+
+    # ---- 计算时实际决定使用哪一列：优先用表头匹配，失败则用列号 ----
+    def resolve_col_index(df, header_name, manual_1based):
+        """
+        返回 0-based 列索引：
+        - 优先按 header_name 在表头中查找（不区分大小写，先全等后包含）
+        - 若没找到，则使用 manual_1based - 1
+        """
+        if df is not None and header_name:
+            cols_lower = [str(c).strip().lower() for c in df.columns]
+            target = header_name.strip().lower()
+            for i, c in enumerate(cols_lower):
+                if c == target:
+                    return i
+            for i, c in enumerate(cols_lower):
+                if target in c:
+                    return i
+        # fallback: 使用手动列号
+        if manual_1based is not None:
+            return int(manual_1based) - 1
+        raise ValueError(f"Cannot resolve column for header '{header_name}'")
+
+    # ===================== 体积计算流程（带 PO + Invoices + 精简列） =====================
+    def process_volume_file(file_bytes, prod_idx, qty_idx, inv_idx, po_idx):
+        dfw = read_excel_any(BytesIO(file_bytes))
+
+        # 安全保护：索引溢出就报错
+        ncols = dfw.shape[1]
+        for idx_check, label in [
+            (prod_idx, "Product Name"),
+            (qty_idx, "Quantity"),
+            (inv_idx, "Invoices"),
+            (po_idx, "PO No"),
+        ]:
+            if idx_check < 0 or idx_check >= ncols:
+                raise ValueError(f"Column index for {label} out of range.")
+
+        # 基础列
+        product_names = dfw.iloc[:, prod_idx].fillna("").astype(str).tolist()
+        quantities = pd.to_numeric(dfw.iloc[:, qty_idx], errors="coerce").fillna(0)
+
+        inv_series = dfw.iloc[:, inv_idx] if inv_idx is not None else pd.Series([""] * len(dfw))
+        po_series = dfw.iloc[:, po_idx] if po_idx is not None else pd.Series([""] * len(dfw))
+
+        # 合并 PO No 与 Invoices 到一个单元格（PO 在前，用逗号隔开）
+        merged_ref = []
+        for po, inv in zip(po_series, inv_series):
+            po_s = "" if pd.isna(po) else str(po).strip()
+            inv_s = "" if pd.isna(inv) else str(inv).strip()
+            if po_s and inv_s:
+                merged_ref.append(f"{po_s}, {inv_s}")
+            elif po_s:
+                merged_ref.append(po_s)
+            else:
+                merged_ref.append(inv_s)
+
+        # ---- 并行做体积匹配 ----
         total = len(product_names)
         volumes = [None] * total
 
@@ -300,7 +408,6 @@ if tool == "TRF Volume Calculator":
                 out.append(vol)
             return out
 
-        from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=4) as pool:
             chunk = max(total // 4, 1)
             futures = [
@@ -313,26 +420,64 @@ if tool == "TRF Volume Calculator":
                 volumes[pos : pos + len(batch)] = batch
                 pos += len(batch)
 
-        dfw["Volume"] = pd.to_numeric(pd.Series(volumes), errors="coerce").fillna(0)
-        dfw["Total Volume"] = dfw["Volume"] * quantities
+        # 只保留三列 + Volume & Total Volume
+        df_res = pd.DataFrame(
+            {
+                "PO/Invoice": merged_ref,                         # 合并 PO No + Invoices
+                "Invoices": inv_series.astype(str).fillna(""),    # 原 Invoices
+                "Order Qty": quantities,                          # 数量
+            }
+        )
 
-        # 最后一行汇总
-        summary = pd.DataFrame({"Total Volume": [dfw["Total Volume"].sum()]})
-        dfw = pd.concat([dfw, summary], ignore_index=True)
-        return dfw
+        df_res["Volume"] = pd.to_numeric(pd.Series(volumes), errors="coerce").fillna(0)
+        df_res["Total Volume"] = df_res["Volume"] * df_res["Order Qty"]
+
+        # 最后一行汇总 Total Volume
+        summary = pd.DataFrame(
+            {
+                "PO/Invoice": [""],
+                "Invoices": [""],
+                "Order Qty": [""],
+                "Volume": [""],
+                "Total Volume": [df_res["Total Volume"].sum()],
+            }
+        )
+
+        df_final = pd.concat([df_res, summary], ignore_index=True)
+        return df_final
 
     # ===================== 触发计算与下载 =====================
-    if warehouse_file and st.button("Calculate volume"):
-        with st.spinner("Processing…"):
-            try:
-                result_df = process_volume_file(warehouse_file, col_prod - 1, col_qty - 1)
-                buffer = BytesIO()
-                with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-                    result_df.to_excel(writer, index=False)
-                buffer.seek(0)
-                st.download_button("📥 Download Excel", buffer, file_name="TRF_Volume_Result.xlsx")
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
+    if warehouse_file and uploaded_bytes and st.button("Calculate volume"):
+        if df_preview is None:
+            st.error("❌ File not loaded correctly, please re-upload.")
+        else:
+            with st.spinner("Processing…"):
+                try:
+                    prod_idx = resolve_col_index(df_preview, header_prod, col_prod)
+                    qty_idx = resolve_col_index(df_preview, header_qty, col_qty)
+                    inv_idx = resolve_col_index(df_preview, header_order, col_order)
+                    po_idx = resolve_col_index(df_preview, header_po, col_po)
+
+                    result_df = process_volume_file(
+                        uploaded_bytes, prod_idx, qty_idx, inv_idx, po_idx
+                    )
+
+                    buffer = BytesIO()
+                    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+                        result_df.to_excel(writer, index=False)
+                    buffer.seek(0)
+
+                    st.success("✅ Volume calculation complete.")
+                    st.dataframe(result_df.head(50), use_container_width=True)
+
+                    st.download_button(
+                        "📥 Download Excel",
+                        buffer,
+                        file_name="TRF_Volume_Result.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
 
     pass
 
