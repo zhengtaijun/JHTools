@@ -412,13 +412,21 @@ if tool == "TRF Volume Calculator":
         # 合并 PO No 与 Invoices 到一个单元格（PO 在前，用逗号隔开，并在数字前加 "PO"）
         merged_ref = []
         for po, inv in zip(po_series, inv_series):
+            # --- 处理 PO 为纯文本，去掉 .0、小数、空格等 ---
             po_s = "" if pd.isna(po) else str(po).strip()
-            inv_s = "" if pd.isna(inv) else str(inv).strip()
 
-            # 在原 PO 号码前统一加上 "PO" 前缀（如果还没有）
             if po_s:
+                # 如果是纯数字或数字.0，变成纯整数字符串
+                if re.fullmatch(r"\d+(\.0+)?", po_s):
+                    po_s = po_s.split(".", 1)[0]
+
+                po_s = po_s.strip()
+
+                # 统一加上“PO”前缀（如果没有）
                 if not po_s.upper().startswith("PO"):
                     po_s = f"PO{po_s}"
+
+            inv_s = "" if pd.isna(inv) else str(inv).strip()
 
             if po_s and inv_s:
                 merged_ref.append(f"{po_s}, {inv_s}")
@@ -426,6 +434,7 @@ if tool == "TRF Volume Calculator":
                 merged_ref.append(po_s)
             else:
                 merged_ref.append(inv_s)
+
 
         # ---- 并行做体积匹配 ----
         total = len(product_names)
