@@ -315,7 +315,16 @@ if tool == "TRF Volume Calculator":
     auto_po = _auto_detect_col(df_preview, header_po, fallback=1)
 
     # ---- 手动列号（1-based），默认显示自动匹配到的值，仍可修改 ----
+    # ---- 手动列号（1-based），默认显示自动匹配到的值，仍可修改 ----
     st.markdown("### #️⃣ Column numbers (1-based, optional override)")
+
+    # 开关：是否用手动列号强行 override
+    use_manual_cols = st.checkbox(
+        "Use manual column numbers to override header detection",
+        value=False,
+        help="默认关闭：仅使用上面的表头标题来识别列。勾选后：强制使用下面的列号。"
+    )
+
     col_prod = st.number_input(
         "Column # of **Product Name**",
         min_value=1,
@@ -341,26 +350,40 @@ if tool == "TRF Volume Calculator":
         value=min(max(auto_po, 1), max_cols),
     )
 
-    # ---- 计算时实际决定使用哪一列：优先用表头匹配，失败则用列号 ----
-    def resolve_col_index(df, header_name, manual_1based):
+    # ---- 计算时实际决定使用哪一列 ----
+    def resolve_col_index(df, header_name, manual_1based, auto_1based, use_manual: bool):
         """
         返回 0-based 列索引：
-        - 优先按 header_name 在表头中查找（不区分大小写，先全等后包含）
-        - 若没找到，则使用 manual_1based - 1
+
+        - 当 use_manual=True 时：
+            直接使用 manual_1based - 1（强制 override）
+        - 当 use_manual=False 时：
+            只用 header_name 在表头中查找（先全等后包含），
+            如果完全找不到，则退回自动侦测的 auto_1based - 1
         """
+        # 手动 override 模式
+        if use_manual and manual_1based is not None:
+            return int(manual_1based) - 1
+
+        # 标题匹配模式（默认）
         if df is not None and header_name:
             cols_lower = [str(c).strip().lower() for c in df.columns]
             target = header_name.strip().lower()
+            # 完全匹配
             for i, c in enumerate(cols_lower):
                 if c == target:
                     return i
+            # 包含匹配
             for i, c in enumerate(cols_lower):
-                if target in c:
+                if target and target in c:
                     return i
-        # fallback: 使用手动列号
-        if manual_1based is not None:
-            return int(manual_1based) - 1
+
+        # 标题完全找不到，退回自动识别出来的列号
+        if auto_1based is not None:
+            return int(auto_1based) - 1
+
         raise ValueError(f"Cannot resolve column for header '{header_name}'")
+
 
     # ===================== 体积计算流程（带 PO + Invoices + 精简列） =====================
     def process_volume_file(file_bytes, prod_idx, qty_idx, inv_idx, po_idx):
@@ -453,10 +476,11 @@ if tool == "TRF Volume Calculator":
         else:
             with st.spinner("Processing…"):
                 try:
-                    prod_idx = resolve_col_index(df_preview, header_prod, col_prod)
-                    qty_idx = resolve_col_index(df_preview, header_qty, col_qty)
-                    inv_idx = resolve_col_index(df_preview, header_order, col_order)
-                    po_idx = resolve_col_index(df_preview, header_po, col_po)
+                    prod_idx = resolve_col_index(df_preview, header_prod, col_prod, auto_prod, use_manual_cols)
+                    qty_idx  = resolve_col_index(df_preview, header_qty,  col_qty,  auto_qty,  use_manual_cols)
+                    inv_idx  = resolve_col_index(df_preview, header_order, col_order, auto_order, use_manual_cols)
+                    po_idx   = resolve_col_index(df_preview, header_po,   col_po,   auto_po,   use_manual_cols)
+
 
                     result_df = process_volume_file(
                         uploaded_bytes, prod_idx, qty_idx, inv_idx, po_idx
