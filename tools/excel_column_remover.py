@@ -5,7 +5,7 @@ from io import BytesIO
 
 DEFAULT_DROP_COLUMNS = [
     "Outlet","Supplier Name","Reference PO ID","External Order ID","Stock Receipts","Invoices",
-    "FOB","Internal Comments","Original ETD","ETA First Receipt Date","Last Receipt Date","Closed",
+    "FOB","Internal Comments","Original ETD","ETA","First Receipt Date","Last Receipt Date","Closed",
     "Sailed","Ship Status","Deposit","Dep Due","Bal Due","Prod Type","Season","Product ID",
     "Supplier SKU","Supplier SKU 2","Manufacturer SKU","Disabled (True/False)","Bin",
     "Special Order Qty","Received Qty","Cancelled Qty","Remaining Qty","Back Order Qty",
@@ -93,3 +93,4 @@ def render():
             file_name="cleaned.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
