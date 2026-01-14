@@ -9,6 +9,7 @@ from tools.profit_calculator import render as profit_render
 from tools.list_split import render as list_split_render
 from tools.image_table_extractor import render as img_ocr_render
 from tools.google_sheet_query import render as sheet_render
+from tools.excel_column_remover import render as excel_column_remover_render
 
 
 def main():
@@ -25,6 +26,7 @@ def main():
     st.title("🛠️ Jory Henley CHC – Internal Tools Suite")
     st.caption("© 2025 • App author: **Andy Wang**")
 
+    # Pages registry (key = sidebar label, value = render function)
     pages = {
         "TRF Volume Calculator": trf_render,
         "Order Merge Tool": freight_render,
@@ -33,6 +35,7 @@ def main():
         "List Split": list_split_render,
         "Image Table Extractor": img_ocr_render,
         "Google Sheet Query": sheet_render,
+        "Excel Column Remover": excel_column_remover_render,
     }
 
     tool = st.sidebar.radio("🧰 Select a tool:", list(pages.keys()), index=0)
